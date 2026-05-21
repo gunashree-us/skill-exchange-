@@ -1,5 +1,8 @@
 from core import DEBUG_MODE, app, init_db, socketio
 
+# Initialize database automatically on startup
+init_db()
+
 # Import route modules for side effects so decorators and Socket.IO handlers register once.
 import routes.admin  # noqa: F401
 import routes.auth  # noqa: F401

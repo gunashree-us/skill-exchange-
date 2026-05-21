@@ -166,6 +166,15 @@ def column_exists(db, table_name, column_name):
     return any(column[1] == column_name for column in columns)
 
 
+def table_exists(db, table_name):
+    # Detect whether the base schema table already exists before running migrations.
+    row = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
 def ensure_schema_updates(db):
     # Backfill new columns for local databases created before recent features existed.
     request_table_sql = db.execute(
@@ -333,7 +342,7 @@ def ensure_database_ready(db, *, force_schema_bootstrap=False):
             db.commit()
             SCHEMA_BOOTSTRAPPED = True
             return
-        if force_schema_bootstrap:
+        if force_schema_bootstrap or not table_exists(db, "users") or not table_exists(db, "exchange_requests"):
             with open(os.path.join(BASE_DIR, "schema.sql"), "r", encoding="utf-8") as schema_file:
                 db.executescript(schema_file.read())
         ensure_schema_updates(db)
