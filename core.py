@@ -395,6 +395,33 @@ def csrf_protect():
             return redirect(request.referrer or url_for("index"))
 
 
+@app.before_request
+def redirect_admins_to_admin_panel():
+    # Keep admin sessions inside the admin workspace even if a stale member URL opens after login.
+    if g.get("user") is None or not g.user["is_admin"]:
+        return None
+    if request.method not in {"GET", "HEAD"}:
+        return None
+    if request.blueprint == "static" or request.path.startswith("/static/") or request.path.startswith("/socket.io/"):
+        return None
+    if request.endpoint in {None, "admin", "toggle_admin", "logout"}:
+        return None
+    member_endpoints = {
+        "index",
+        "dashboard",
+        "browse",
+        "matches",
+        "chat",
+        "profile",
+        "profile_setup",
+        "skills",
+        "requests_view",
+    }
+    if request.endpoint in member_endpoints:
+        return redirect(url_for("admin"))
+    return None
+
+
 @app.context_processor
 def inject_helpers():
     # Expose current_user and csrf_token() to every template automatically.

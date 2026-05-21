@@ -56,6 +56,8 @@ def index():
 @login_required
 def dashboard():
     # Member dashboard summarizing skills, requests, recommendations, and matches.
+    if g.user["is_admin"]:
+        return redirect(url_for("admin"))
     teach_skills = [
         dict(item)
         for item in query_db(
@@ -331,4 +333,3 @@ def matches():
         term=term,
         active_page="match",
     )
-
