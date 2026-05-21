@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="soft-band page-band">
+    <div class="shell">
+        <div class="page-heading">
+            <h1>Exchange Requests</h1>
+            <p>Track incoming requests, sent proposals, and leave feedback after accepted sessions.</p>
+        </div>
+
+        <div class="two-col-layout">
+            <article class="surface-card">
+                <h2>Received Requests</h2>
+                <div class="list-stack">
+                    {% for item in received %}
+                        <div class="request-line">
+                            <div>
+                                <strong>{{ item.sender_name }}</strong>
+                                <span>Offers {{ item.offer_skill }} and wants {{ item.request_skill }}</span>
+                                <p>{{ item.message or 'No message provided.' }}</p>
+                                <p>Proposed: {{ item.proposed_time or 'No time proposed yet' }} · {{ item.duration_minutes }} min</p>
+                                {% if item.schedule_note %}
+                                    <p>Schedule note: {{ item.schedule_note }}</p>
+                                {% endif %}
+                            </div>
+                            <div class="request-actions">
+                                <span class="status-pill {{ item.status|lower }}">{{ item.status }}</span>
+                                {% if item.status == 'Pending' %}
+                                    <form method="post" action="{{ url_for('update_request_status', request_id=item.id) }}">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button class="button button-dark small-button" type="submit" name="status" value="Accepted">Accept</button>
+                                        <button class="button button-light small-button" type="submit" name="status" value="Rejected">Reject</button>
+                                    </form>
+                                    <form method="post" action="{{ url_for('counter_request', request_id=item.id) }}" class="counter-form">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <input type="datetime-local" name="proposed_time" value="{{ item.proposed_time }}">
+                                        <select name="duration_minutes">
+                                            {% for duration in durations %}
+                                                <option value="{{ duration }}" {% if item.duration_minutes == duration %}selected{% endif %}>{{ duration }} min</option>
+                                            {% endfor %}
+                                        </select>
+                                        <input type="text" name="schedule_note" value="{{ item.schedule_note }}" placeholder="Offer an alternative time or format">
+                                        <button class="button button-light small-button" type="submit">Counter</button>
+                                    </form>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% else %}
+                        <div class="empty-state">No requests received yet.</div>
+                    {% endfor %}
+                </div>
+            </article>
+
+            <article class="surface-card">
+                <h2>Sent Requests</h2>
+                <div class="list-stack">
+                    {% for item in sent %}
+                        <div class="request-line">
+                            <div>
+                                <strong>{{ item.receiver_name }}</strong>
+                                <span>Offer {{ item.offer_skill }} · Want {{ item.request_skill }}</span>
+                                <p>{{ item.message or 'No message provided.' }}</p>
+                                <p>Proposed: {{ item.proposed_time or 'No time proposed yet' }} · {{ item.duration_minutes }} min</p>
+                                {% if item.schedule_note %}
+                                    <p>Schedule note: {{ item.schedule_note }}</p>
+                                {% endif %}
+                            </div>
+                            <div class="request-actions">
+                                <span class="status-pill {{ item.status|lower }}">{{ item.status }}</span>
+                                {% if item.status == 'Countered' %}
+                                    <form method="post" action="{{ url_for('update_request_status', request_id=item.id) }}">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button class="button button-dark small-button" type="submit" name="status" value="Accepted">Accept Counter</button>
+                                        <button class="button button-light small-button" type="submit" name="status" value="Rejected">Reject</button>
+                                    </form>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% else %}
+                        <div class="empty-state">No requests sent yet.</div>
+                    {% endfor %}
+                </div>
+            </article>
+        </div>
+
+        <article class="surface-card">
+            <h2>Leave Feedback</h2>
+            <div class="review-form-stack">
+                {% for item in reviewable %}
+                    <form method="post" action="{{ url_for('add_review', request_id=item.id) }}" class="review-form-card">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <strong>Review your exchange with {{ item.partner_name }}</strong>
+                        <label>Rating
+                            <select name="rating">
+                                <option value="5">5</option>
+                                <option value="4">4</option>
+                                <option value="3">3</option>
+                                <option value="2">2</option>
+                                <option value="1">1</option>
+                            </select>
+                        </label>
+                        <label>Feedback
+                            <textarea name="feedback" rows="3" placeholder="Share what went well"></textarea>
+                        </label>
+                        <button class="button button-dark" type="submit">Submit Review</button>
+                    </form>
+                {% else %}
+                    <div class="empty-state">No accepted exchanges waiting for feedback.</div>
+                {% endfor %}
+            </div>
+        </article>
+    </div>
+</section>
+{% endblock %}

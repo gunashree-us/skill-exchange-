@@ -1,0 +1,1565 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="soft-band page-band">
+    <div class="shell">
+        {% if threads %}
+            <div class="chat-layout">
+                <aside class="chat-sidebar">
+                    {% for thread in threads %}
+                        <a href="{{ url_for('chat', partner_id=thread.id) }}" class="chat-thread {% if thread.active %}active{% endif %}" data-thread-id="{{ thread.id }}">
+                            <div class="avatar-circle">{{ thread.initials }}</div>
+                            <div class="chat-thread-copy">
+                                <div class="thread-head">
+                                    <strong>{{ thread.name }}</strong>
+                                    <span class="thread-time">{{ thread.time }}</span>
+                                </div>
+                                <p>{{ thread.preview }}</p>
+                            </div>
+                            {% if thread.unread %}
+                                <span class="unread-dot">{{ thread.unread }}</span>
+                            {% else %}
+                                <span class="unread-dot is-hidden">0</span>
+                            {% endif %}
+                        </a>
+                    {% endfor %}
+                </aside>
+
+                <section class="chat-panel">
+                    {% if active_thread %}
+                        <div class="chat-panel-head">
+                            <div class="chat-panel-head-main">
+                                <div class="avatar-circle">{{ active_thread.initials }}</div>
+                                <div>
+                                    <strong>{{ active_thread.name }}</strong>
+                                    <span id="typingIndicator">Accepted exchange partner</span>
+                                </div>
+                            </div>
+                            <div class="chat-call-actions">
+                                <button class="button button-dark small-button" type="button" id="startCallButton">Video Call</button>
+                                <button class="button button-light small-button" type="button" id="startConferenceButton">Conference</button>
+                            </div>
+                        </div>
+
+                        <div class="secure-chat-bar">
+                            <div class="secure-chat-copy">
+                                <strong>End-to-end encryption</strong>
+                                <span id="secureStatus">Setting up secure messaging for this signed-in account…</span>
+                            </div>
+                            <div class="secure-chat-actions">
+                                <button class="button button-outline small-button" type="button" id="resetSecureDeviceButton">Reset Secure Chat Key</button>
+                            </div>
+                        </div>
+
+                        <div class="call-banner is-hidden" id="incomingCallBanner">
+                            <div>
+                                <strong id="incomingCallTitle">{{ active_thread.name }} is calling</strong>
+                                <span id="incomingCallText">Join the live video session.</span>
+                            </div>
+                            <div class="call-banner-actions">
+                                <button class="button button-light small-button" type="button" id="acceptCallButton">Accept</button>
+                                <button class="button button-outline small-button" type="button" id="declineCallButton">Decline</button>
+                            </div>
+                        </div>
+
+                        <div class="chat-messages" id="chatMessages" data-partner-id="{{ active_thread.id }}">
+                            <button class="button button-light small-button load-older-button" id="loadOlderButton" type="button">Load older messages</button>
+                            {% for message in messages %}
+                                <div class="chat-bubble {{ message.side }}" data-message-id="{{ message.id }}">
+                                    <p class="message-body" data-raw-body="{{ message.raw_body|e }}" data-encrypted="{{ 1 if message.encrypted else 0 }}">{{ message.body }}</p>
+                                    <div class="chat-meta">
+                                        <span>{{ message.created_at }}</span>
+                                        {% if message.status %}
+                                            <em class="message-status">{{ message.status }}</em>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            {% else %}
+                                <div class="empty-state">No messages yet. Start the conversation below.</div>
+                            {% endfor %}
+                        </div>
+
+                        <form class="chat-input-row" id="chatForm" method="post" action="{{ url_for('send_chat_message', partner_id=active_thread.id) }}">
+                            <input type="hidden" name="csrf_token" id="csrfToken" value="{{ csrf_token() }}">
+                            <input type="text" name="body" id="messageInput" placeholder="Type your message..." maxlength="500" autocomplete="off" required>
+                            <button class="send-button" type="submit">➤</button>
+                        </form>
+                    {% else %}
+                        <div class="empty-state">Choose a conversation to start chatting.</div>
+                    {% endif %}
+                </section>
+            </div>
+        {% else %}
+            <article class="surface-card">
+                <h1>No Chat Partners Yet</h1>
+                <p class="match-meta">Chat unlocks after an exchange request is accepted. Send a request from the Match page, then ask the other user to accept it.</p>
+                <a href="{{ url_for('matches') }}" class="button button-dark">Find Matches</a>
+            </article>
+        {% endif %} {# threads #}
+    </div>
+</section>
+
+{% if active_thread %}
+<div class="call-modal is-hidden" id="callModal">
+    <div class="call-modal-backdrop" id="callModalBackdrop"></div>
+    <div class="call-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="callModalTitle" tabindex="-1">
+        <div class="call-modal-head">
+            <div>
+                <strong id="callModalTitle">Video Call</strong>
+                <span id="videoCallStatus">Camera off. Start a call to connect.</span>
+            </div>
+            <div class="call-modal-actions">
+                <button class="button button-outline small-button is-hidden" type="button" id="muteButton">Mute</button>
+                <button class="button button-outline small-button is-hidden" type="button" id="cameraButton">Camera Off</button>
+                <button class="button button-light small-button is-hidden" type="button" id="fullscreenButton">Full Screen</button>
+                <button class="button button-dark small-button is-hidden" type="button" id="endCallButton">End Call</button>
+            </div>
+        </div>
+        <div class="call-video-grid" id="callVideoGrid">
+            <div class="video-panel local-panel is-hidden" id="localPanel">
+                <video id="localVideo" autoplay playsinline muted></video>
+                <button class="panel-expand-btn" type="button" aria-label="Expand your video">⛶</button>
+                <span class="video-label">You</span>
+            </div>
+            <div class="conference-remote-grid" id="remoteVideoGrid"></div>
+        </div>
+    </div>
+</div>
+
+<div class="conference-picker-modal is-hidden" id="conferencePickerModal">
+    <div class="conference-picker-backdrop" id="conferencePickerBackdrop"></div>
+    <div class="conference-picker-dialog">
+        <div class="conference-picker-head">
+            <div>
+                <strong>Start Group Conference</strong>
+                <span>{{ active_thread.name }} is included automatically. Pick at least one more partner.</span>
+            </div>
+            <button class="icon-link" type="button" id="closeConferencePicker">✕</button>
+        </div>
+        <form class="conference-picker-form" id="conferencePickerForm">
+            <div class="conference-picker-list">
+                {% for thread in threads if thread.id != active_thread.id %}
+                    <label class="conference-picker-option">
+                        <input type="checkbox" name="participant_ids" value="{{ thread.id }}">
+                        <span class="conference-picker-copy">
+                            <strong>{{ thread.name }}</strong>
+                            <small>{{ thread.preview }}</small>
+                        </span>
+                    </label>
+                {% endfor %}
+            </div>
+            <div class="conference-picker-actions">
+                <button class="button button-outline" type="button" id="cancelConferenceButton">Cancel</button>
+                <button class="button button-dark" type="submit">Start Conference</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+{% if active_thread %}
+<script>
+const chatMessages = document.getElementById("chatMessages");
+const chatForm = document.getElementById("chatForm");
+const messageInput = document.getElementById("messageInput");
+const sendMessageButton = chatForm.querySelector('button[type="submit"]');
+const csrfToken = document.getElementById("csrfToken").value;
+const partnerId = chatMessages.dataset.partnerId;
+const typingIndicator = document.getElementById("typingIndicator");
+const loadOlderButton = document.getElementById("loadOlderButton");
+const startCallButton = document.getElementById("startCallButton");
+const startConferenceButton = document.getElementById("startConferenceButton");
+const secureStatus = document.getElementById("secureStatus");
+const resetSecureDeviceButton = document.getElementById("resetSecureDeviceButton");
+const incomingCallBanner = document.getElementById("incomingCallBanner");
+const incomingCallTitle = document.getElementById("incomingCallTitle");
+const incomingCallText = document.getElementById("incomingCallText");
+const acceptCallButton = document.getElementById("acceptCallButton");
+const declineCallButton = document.getElementById("declineCallButton");
+const callModal = document.getElementById("callModal");
+const callModalBackdrop = document.getElementById("callModalBackdrop");
+const callModalTitle = document.getElementById("callModalTitle");
+const videoCallStatus = document.getElementById("videoCallStatus");
+const muteButton = document.getElementById("muteButton");
+const cameraButton = document.getElementById("cameraButton");
+const fullscreenButton = document.getElementById("fullscreenButton");
+const endCallButton = document.getElementById("endCallButton");
+const localPanel = document.getElementById("localPanel");
+const localVideo = document.getElementById("localVideo");
+const remoteVideoGrid = document.getElementById("remoteVideoGrid");
+const conferencePickerModal = document.getElementById("conferencePickerModal");
+const conferencePickerBackdrop = document.getElementById("conferencePickerBackdrop");
+const closeConferencePicker = document.getElementById("closeConferencePicker");
+const cancelConferenceButton = document.getElementById("cancelConferenceButton");
+const conferencePickerForm = document.getElementById("conferencePickerForm");
+const socket = io();
+const currentUserId = {{ current_user.id }};
+const currentUserName = {{ current_user.name|tojson }};
+const activeThreadName = {{ active_thread.name|tojson }};
+const conferenceCandidates = {{ threads|tojson }};
+let typingTimeout = null;
+let localStream = null;
+let pendingInvite = null;
+let pendingDirectOffer = null;
+let activeCallMode = "idle";
+let activeConferenceRoomId = null;
+let directCallTargetId = Number(partnerId);
+let peerConnections = new Map();
+let pendingIceCandidates = new Map();
+let callState = "idle";
+let isMuted = false;
+let isCameraOff = false;
+let localPublicKeyB64 = null;
+let localPrivateKey = null;
+let currentDeviceId = null;
+let peerDeviceMap = new Map();
+let isSendingMessage = false;
+let syncInFlight = false;
+let callModalFocusActive = false;
+let previousFocusedElement = null;
+const rtcConfig = {iceServers: {{ webrtc_ice_servers|tojson }}};
+let accountWrappedPrivateKey = {{ (current_user["private_key_wrapped"] or "")|tojson }};
+let accountKeySalt = {{ (current_user["private_key_salt"] or "")|tojson }};
+const currentAccountPublicKey = {{ (current_user["public_key"] or "")|tojson }};
+const focusableSelector = [
+    "a[href]",
+    "button:not([disabled])",
+    "input:not([disabled])",
+    "select:not([disabled])",
+    "textarea:not([disabled])",
+    "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+function socketPayload(payload = {}) {
+    return {csrf_token: csrfToken, ...payload};
+}
+
+function escapeHtml(value) {
+    const div = document.createElement("div");
+    div.innerText = value;
+    return div.innerHTML;
+}
+
+function escapeAttribute(value) {
+    return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
+function bytesToBase64(bytes) {
+    return btoa(String.fromCharCode(...bytes));
+}
+
+function base64ToBytes(value) {
+    return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+}
+
+function loginPasswordStorageKey() {
+    return "skillswap:last-login-password";
+}
+
+function accountPublicKeyStorageKey() {
+    return `skillswap:e2ee:account-public:${currentUserId}`;
+}
+
+const secureKeyStoreName = "privateKeys";
+
+function secureKeyId() {
+    return `account-private:${currentUserId}`;
+}
+
+function openSecureKeyStore() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open("skillswap-e2ee-keys", 1);
+        request.onupgradeneeded = () => {
+            request.result.createObjectStore(secureKeyStoreName);
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+async function readStoredPrivateKey() {
+    const database = await openSecureKeyStore();
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction(secureKeyStoreName, "readonly");
+        const request = transaction.objectStore(secureKeyStoreName).get(secureKeyId());
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => database.close();
+        transaction.onerror = () => database.close();
+    });
+}
+
+async function writeStoredPrivateKey(privateKey) {
+    const database = await openSecureKeyStore();
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction(secureKeyStoreName, "readwrite");
+        const request = transaction.objectStore(secureKeyStoreName).put(privateKey, secureKeyId());
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => database.close();
+        transaction.onerror = () => database.close();
+    });
+}
+
+async function deleteStoredPrivateKey() {
+    const database = await openSecureKeyStore();
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction(secureKeyStoreName, "readwrite");
+        const request = transaction.objectStore(secureKeyStoreName).delete(secureKeyId());
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => database.close();
+        transaction.onerror = () => database.close();
+    });
+}
+
+function readLoginPassword() {
+    return sessionStorage.getItem(loginPasswordStorageKey()) || "";
+}
+
+async function importPublicKey(base64Key) {
+    return crypto.subtle.importKey(
+        "spki",
+        base64ToBytes(base64Key),
+        {name: "RSA-OAEP", hash: "SHA-256"},
+        false,
+        ["encrypt"],
+    );
+}
+
+async function importPrivateKey(base64Key) {
+    return crypto.subtle.importKey(
+        "pkcs8",
+        base64ToBytes(base64Key),
+        {name: "RSA-OAEP", hash: "SHA-256"},
+        false,
+        ["decrypt"],
+    );
+}
+
+async function deriveWrappingKey(password, saltBytes) {
+    const baseKey = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(password),
+        "PBKDF2",
+        false,
+        ["deriveKey"],
+    );
+    return crypto.subtle.deriveKey(
+        {
+            name: "PBKDF2",
+            salt: saltBytes,
+            iterations: 250000,
+            hash: "SHA-256",
+        },
+        baseKey,
+        {name: "AES-GCM", length: 256},
+        false,
+        ["encrypt", "decrypt"],
+    );
+}
+
+async function wrapPrivateKeyForPassword(base64PrivateKey, password) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const wrappingKey = await deriveWrappingKey(password, salt);
+    const ciphertext = await crypto.subtle.encrypt(
+        {name: "AES-GCM", iv},
+        wrappingKey,
+        base64ToBytes(base64PrivateKey),
+    );
+    return {
+        wrapped: bytesToBase64(new Uint8Array(ciphertext)),
+        salt: bytesToBase64(salt),
+        iv: bytesToBase64(iv),
+    };
+}
+
+async function unwrapPrivateKeyForPassword(payload, password) {
+    if (!payload?.wrapped || !payload?.salt || !payload?.iv || !password) {
+        throw new Error("Secure chat key is unavailable on this signed-in account.");
+    }
+    const wrappingKey = await deriveWrappingKey(password, base64ToBytes(payload.salt));
+    const privateKeyBytes = await crypto.subtle.decrypt(
+        {name: "AES-GCM", iv: base64ToBytes(payload.iv)},
+        wrappingKey,
+        base64ToBytes(payload.wrapped),
+    );
+    return importPrivateKey(bytesToBase64(new Uint8Array(privateKeyBytes)));
+}
+
+async function ensureDeviceKeys() {
+    if (localPublicKeyB64 && localPrivateKey) return;
+    let storedPublic = localStorage.getItem(accountPublicKeyStorageKey()) || currentAccountPublicKey || "";
+    let storedPrivateKey = await readStoredPrivateKey();
+    const password = readLoginPassword();
+    if (!storedPrivateKey && storedPublic && accountWrappedPrivateKey && accountKeySalt && password) {
+        try {
+            const wrappedPayload = JSON.parse(atob(accountWrappedPrivateKey));
+            storedPrivateKey = await unwrapPrivateKeyForPassword(
+                {
+                    wrapped: wrappedPayload.wrapped,
+                    iv: wrappedPayload.iv,
+                    salt: accountKeySalt,
+                },
+                password,
+            );
+            await writeStoredPrivateKey(storedPrivateKey);
+        } catch (_error) {
+            storedPrivateKey = null;
+        }
+    }
+    if (!storedPublic || !storedPrivateKey) {
+        if (!password) {
+            throw new Error("Sign in again on this browser to unlock secure chat.");
+        }
+        const pair = await crypto.subtle.generateKey(
+            {
+                name: "RSA-OAEP",
+                modulusLength: 2048,
+                publicExponent: new Uint8Array([1, 0, 1]),
+                hash: "SHA-256",
+            },
+            true,
+            ["encrypt", "decrypt"],
+        );
+        storedPublic = bytesToBase64(new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey)));
+        const privateKeyBytes = bytesToBase64(new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey)));
+        const wrappedPrivateKey = await wrapPrivateKeyForPassword(privateKeyBytes, password);
+        accountWrappedPrivateKey = btoa(JSON.stringify({wrapped: wrappedPrivateKey.wrapped, iv: wrappedPrivateKey.iv}));
+        accountKeySalt = wrappedPrivateKey.salt;
+        storedPrivateKey = await importPrivateKey(privateKeyBytes);
+        await writeStoredPrivateKey(storedPrivateKey);
+    }
+    localPublicKeyB64 = storedPublic;
+    localPrivateKey = storedPrivateKey;
+    localStorage.setItem(accountPublicKeyStorageKey(), storedPublic);
+}
+
+async function registerCurrentDevice() {
+    await ensureDeviceKeys();
+    const response = await fetch("{{ url_for('register_device') }}", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": csrfToken,
+        },
+        body: JSON.stringify({
+            public_key: localPublicKeyB64,
+            private_key_wrapped: accountWrappedPrivateKey,
+            private_key_salt: accountKeySalt,
+        }),
+    });
+    if (!response.ok) {
+        throw new Error("Unable to set up secure chat on this account.");
+    }
+    const data = await response.json();
+    currentDeviceId = Number(data.device_id);
+    accountWrappedPrivateKey = data.private_key_wrapped || accountWrappedPrivateKey;
+    accountKeySalt = data.private_key_salt || accountKeySalt;
+}
+
+async function fetchPeerDevices(userIds) {
+    const uniqueIds = Array.from(new Set(userIds.map((id) => Number(id)).filter((id) => id > 0)));
+    if (!uniqueIds.length) return;
+    const response = await fetch("{{ url_for('device_peers') }}", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": csrfToken,
+        },
+        body: JSON.stringify({user_ids: uniqueIds}),
+    });
+    if (!response.ok) {
+        throw new Error("Unable to load secure chat keys.");
+    }
+    const data = await response.json();
+    const devices = data.devices || {};
+    Object.entries(devices).forEach(([userId, entries]) => {
+        peerDeviceMap.set(Number(userId), entries || []);
+    });
+    const accountKeys = data.account_keys || {};
+    const ownAccount = accountKeys[String(currentUserId)] || accountKeys[Number(currentUserId)];
+    if (ownAccount) {
+        accountWrappedPrivateKey = ownAccount.private_key_wrapped || accountWrappedPrivateKey;
+        accountKeySalt = ownAccount.private_key_salt || accountKeySalt;
+        localPublicKeyB64 = ownAccount.public_key || localPublicKeyB64;
+    }
+}
+
+function devicesForUser(userId) {
+    return peerDeviceMap.get(Number(userId)) || [];
+}
+
+function updateSecureStatus() {
+    if (!localPublicKeyB64 || !localPrivateKey || !currentDeviceId) {
+        secureStatus.innerText = "Setting up secure messaging for this signed-in account…";
+    } else if (!devicesForUser(Number(partnerId)).length) {
+        secureStatus.innerText = "Your account is secure. Waiting for this partner to activate secure messaging on their account.";
+    } else {
+        secureStatus.innerText = "Automatic end-to-end encryption is active for chat, voice, and video across your signed-in devices.";
+    }
+}
+
+async function resetDeviceKeys() {
+    localStorage.removeItem(accountPublicKeyStorageKey());
+    await deleteStoredPrivateKey();
+    localPublicKeyB64 = null;
+    localPrivateKey = null;
+    currentDeviceId = null;
+    peerDeviceMap.clear();
+    await ensureAutomaticEncryption();
+    await hydrateVisibleMessages();
+}
+
+async function encryptEnvelopeForDevices(plaintext, recipients) {
+    const validRecipients = recipients.filter((entry) => entry.publicKey && entry.deviceId);
+    if (!validRecipients.length) {
+        throw new Error("No secure recipients are available.");
+    }
+    const encoder = new TextEncoder();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const aesKey = await crypto.subtle.generateKey({name: "AES-GCM", length: 256}, true, ["encrypt", "decrypt"]);
+    const rawAesKey = new Uint8Array(await crypto.subtle.exportKey("raw", aesKey));
+    const ciphertext = await crypto.subtle.encrypt({name: "AES-GCM", iv}, aesKey, encoder.encode(plaintext));
+    const wrappedKeys = {};
+    for (const recipient of validRecipients) {
+        const importedPublicKey = await importPublicKey(recipient.publicKey);
+        const wrappedKey = await crypto.subtle.encrypt({name: "RSA-OAEP"}, importedPublicKey, rawAesKey);
+        wrappedKeys[String(recipient.deviceId)] = bytesToBase64(new Uint8Array(wrappedKey));
+    }
+    return `encauto::${bytesToBase64(new TextEncoder().encode(JSON.stringify({
+        v: 1,
+        iv: bytesToBase64(iv),
+        ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
+        keys: wrappedKeys,
+    })))}`;
+}
+
+function parseEnvelopePayload(envelope) {
+    if (!envelope || !String(envelope).startsWith("encauto::")) {
+        return null;
+    }
+    return JSON.parse(new TextDecoder().decode(base64ToBytes(String(envelope).slice(9))));
+}
+
+function encodeEnvelopePayload(payload) {
+    return `encauto::${bytesToBase64(new TextEncoder().encode(JSON.stringify(payload)))}`;
+}
+
+async function decryptEnvelope(envelope) {
+    if (!envelope || !String(envelope).startsWith("encauto::")) {
+        return String(envelope || "");
+    }
+    if (!localPrivateKey || !currentDeviceId) {
+        throw new Error("Secure account key unavailable.");
+    }
+    const payload = parseEnvelopePayload(envelope);
+    const wrappedKey = payload.keys?.[String(currentDeviceId)];
+    if (!wrappedKey) {
+        throw new Error("No encrypted key is available for this signed-in account.");
+    }
+    const aesKeyBytes = await crypto.subtle.decrypt({name: "RSA-OAEP"}, localPrivateKey, base64ToBytes(wrappedKey));
+    const aesKey = await crypto.subtle.importKey("raw", aesKeyBytes, {name: "AES-GCM"}, false, ["decrypt"]);
+    const plaintext = await crypto.subtle.decrypt(
+        {name: "AES-GCM", iv: base64ToBytes(payload.iv)},
+        aesKey,
+        base64ToBytes(payload.ciphertext),
+    );
+    return new TextDecoder().decode(plaintext);
+}
+
+async function encryptSignalPayload(payload, targetUserId) {
+    const targetDevices = devicesForUser(Number(targetUserId));
+    if (!targetDevices.length) {
+        throw new Error("Target user has not enabled secure messaging yet.");
+    }
+    return {
+        secure_payload: await encryptEnvelopeForDevices(
+            JSON.stringify(payload),
+            targetDevices.map((device) => ({
+                deviceId: device.id,
+                publicKey: device.public_key,
+            })),
+        ),
+        encrypted: true,
+    };
+}
+
+async function decryptSignalPayload(payload) {
+    if (!payload?.encrypted || !payload?.secure_payload) {
+        return payload;
+    }
+    return JSON.parse(await decryptEnvelope(payload.secure_payload));
+}
+
+async function ensureAutomaticEncryption() {
+    await registerCurrentDevice();
+    await fetchPeerDevices([Number(currentUserId), Number(partnerId)]);
+    updateSecureStatus();
+}
+
+async function decryptMessageElement(messageNode) {
+    if (!messageNode) return;
+    const rawBody = messageNode.dataset.rawBody || messageNode.innerText || "";
+    const encrypted = messageNode.dataset.encrypted === "1";
+    if (!encrypted) {
+        messageNode.innerText = rawBody;
+        return;
+    }
+    if (!localPrivateKey) {
+        messageNode.innerText = "Encrypted message. Secure account key unavailable.";
+        return;
+    }
+    try {
+        messageNode.innerText = await decryptEnvelope(rawBody);
+    } catch (_error) {
+        messageNode.innerText = "Unable to decrypt on this signed-in account.";
+    }
+}
+
+async function hydrateVisibleMessages() {
+    const nodes = Array.from(chatMessages.querySelectorAll(".message-body"));
+    await Promise.all(nodes.map((node) => decryptMessageElement(node)));
+    await syncVisibleMessageKeys();
+}
+
+async function rewrapEnvelopeForRecipients(envelope, recipients) {
+    const payload = parseEnvelopePayload(envelope);
+    if (!payload || !localPrivateKey || !currentDeviceId) {
+        return null;
+    }
+    const wrappedKey = payload.keys?.[String(currentDeviceId)];
+    if (!wrappedKey) {
+        return null;
+    }
+    const missingRecipients = recipients.filter((recipient) => {
+        return recipient.publicKey && recipient.deviceId && !payload.keys?.[String(recipient.deviceId)];
+    });
+    if (!missingRecipients.length) {
+        return null;
+    }
+    const aesKeyBytes = new Uint8Array(
+        await crypto.subtle.decrypt({name: "RSA-OAEP"}, localPrivateKey, base64ToBytes(wrappedKey)),
+    );
+    for (const recipient of missingRecipients) {
+        const importedPublicKey = await importPublicKey(recipient.publicKey);
+        const newWrappedKey = await crypto.subtle.encrypt({name: "RSA-OAEP"}, importedPublicKey, aesKeyBytes);
+        payload.keys[String(recipient.deviceId)] = bytesToBase64(new Uint8Array(newWrappedKey));
+    }
+    return encodeEnvelopePayload(payload);
+}
+
+async function syncVisibleMessageKeys() {
+    if (syncInFlight || !localPrivateKey || !currentDeviceId) {
+        return;
+    }
+    const myDevices = devicesForUser(Number(currentUserId))
+        .map((device) => ({deviceId: Number(device.id), publicKey: device.public_key}))
+        .filter((device) => device.deviceId > 0 && device.publicKey);
+    if (myDevices.length < 2) {
+        return;
+    }
+    const updates = [];
+    const seenIds = new Set();
+    const nodes = Array.from(chatMessages.querySelectorAll(".message-body[data-encrypted='1']"));
+    for (const messageNode of nodes) {
+        const bubble = messageNode.closest(".chat-bubble");
+        const messageId = Number(bubble?.dataset.messageId || 0);
+        if (!messageId || seenIds.has(messageId)) {
+            continue;
+        }
+        const rawBody = messageNode.dataset.rawBody || "";
+        try {
+            const updatedBody = await rewrapEnvelopeForRecipients(rawBody, myDevices);
+            if (updatedBody && updatedBody !== rawBody) {
+                updates.push({id: messageId, body: updatedBody});
+                messageNode.dataset.rawBody = updatedBody;
+                seenIds.add(messageId);
+            }
+        } catch (_error) {
+            // Another device may need to sync this message first.
+        }
+    }
+    if (!updates.length) {
+        return;
+    }
+    syncInFlight = true;
+    try {
+        const response = await fetch("{{ url_for('rewrap_message_keys') }}", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRFToken": csrfToken,
+            },
+            body: JSON.stringify({
+                partner_id: Number(partnerId),
+                updates,
+            }),
+        });
+        if (!response.ok) {
+            throw new Error("Unable to sync secure message history to this signed-in account.");
+        }
+    } finally {
+        syncInFlight = false;
+    }
+}
+
+function setCallState(nextState, statusText = "") {
+    callState = nextState;
+    if (statusText) {
+        videoCallStatus.innerText = statusText;
+    }
+    const isIdle = nextState === "idle";
+    callModal.classList.toggle("is-hidden", isIdle);
+    localPanel.classList.toggle("is-hidden", isIdle);
+    startCallButton.disabled = !isIdle;
+    startConferenceButton.disabled = !isIdle;
+    muteButton.classList.toggle("is-hidden", isIdle);
+    cameraButton.classList.toggle("is-hidden", isIdle);
+    fullscreenButton.classList.toggle("is-hidden", isIdle);
+    endCallButton.classList.toggle("is-hidden", isIdle);
+    if (isIdle) {
+        deactivateCallFocusTrap();
+    } else {
+        activateCallFocusTrap();
+    }
+}
+
+function visibleFocusableElements(container) {
+    return Array.from(container.querySelectorAll(focusableSelector)).filter((element) => {
+        return !element.classList.contains("is-hidden") && element.offsetParent !== null;
+    });
+}
+
+function activateCallFocusTrap() {
+    if (callModalFocusActive) return;
+    previousFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    callModalFocusActive = true;
+    document.addEventListener("keydown", trapCallModalFocus);
+    const focusTarget = visibleFocusableElements(callModal)[0] || callModal.querySelector(".call-modal-dialog");
+    focusTarget?.focus({preventScroll: true});
+}
+
+function deactivateCallFocusTrap() {
+    if (!callModalFocusActive) return;
+    callModalFocusActive = false;
+    document.removeEventListener("keydown", trapCallModalFocus);
+    if (previousFocusedElement && document.contains(previousFocusedElement)) {
+        previousFocusedElement.focus({preventScroll: true});
+    }
+    previousFocusedElement = null;
+}
+
+function trapCallModalFocus(event) {
+    if (event.key === "Escape" && collapseExpandedPanel()) {
+        event.preventDefault();
+        return;
+    }
+    if (!callModalFocusActive || event.key !== "Tab") return;
+    const focusable = visibleFocusableElements(callModal);
+    if (!focusable.length) {
+        event.preventDefault();
+        callModal.querySelector(".call-modal-dialog")?.focus({preventScroll: true});
+        return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+    }
+}
+
+function collapseExpandedPanel() {
+    const expandedPanel = callModal.querySelector(".video-panel.is-panel-expanded");
+    if (!expandedPanel) return false;
+    expandedPanel.classList.remove("is-panel-expanded");
+    const button = expandedPanel.querySelector(".panel-expand-btn");
+    if (button) {
+        button.innerText = "⛶";
+        button.setAttribute("aria-label", "Expand video");
+    }
+    return true;
+}
+
+function togglePanelExpand(panel) {
+    if (!panel) return;
+    const isExpanded = panel.classList.contains("is-panel-expanded");
+    collapseExpandedPanel();
+    if (isExpanded) return;
+    panel.classList.add("is-panel-expanded");
+    const button = panel.querySelector(".panel-expand-btn");
+    if (button) {
+        button.innerText = "⊡";
+        button.setAttribute("aria-label", "Collapse video");
+        button.focus({preventScroll: true});
+    }
+}
+
+localPanel.querySelector(".panel-expand-btn")?.addEventListener("click", () => {
+    togglePanelExpand(localPanel);
+});
+
+async function playVideoElement(videoElement) {
+    if (!videoElement) return;
+    try {
+        const playAttempt = videoElement.play?.();
+        if (playAttempt && typeof playAttempt.catch === "function") {
+            await playAttempt.catch(() => {});
+        }
+    } catch (_error) {
+        // Some browsers defer playback until media is fully ready; the next metadata event will retry.
+    }
+}
+
+async function attachStreamToVideo(videoElement, stream, {muted = false} = {}) {
+    if (!videoElement) return;
+    videoElement.srcObject = stream;
+    videoElement.muted = muted;
+    videoElement.autoplay = true;
+    videoElement.playsInline = true;
+    const tryPlay = () => {
+        void playVideoElement(videoElement);
+    };
+    if (videoElement.readyState >= 1) {
+        tryPlay();
+    } else {
+        videoElement.onloadedmetadata = () => {
+            videoElement.onloadedmetadata = null;
+            tryPlay();
+        };
+    }
+}
+
+async function ensureLocalStream() {
+    if (localStream) return localStream;
+    localStream = await navigator.mediaDevices.getUserMedia({video: true, audio: true});
+    await attachStreamToVideo(localVideo, localStream, {muted: true});
+    updateMediaButtons();
+    return localStream;
+}
+
+function setIncomingBanner(visible, title = "", text = "") {
+    incomingCallBanner.classList.toggle("is-hidden", !visible);
+    if (title) incomingCallTitle.innerText = title;
+    if (text) incomingCallText.innerText = text;
+}
+
+function stopLocalStream() {
+    if (!localStream) return;
+    localStream.getTracks().forEach((track) => track.stop());
+    localStream = null;
+    localVideo.srcObject = null;
+}
+
+function updateMediaButtons() {
+    muteButton.innerText = isMuted ? "Unmute" : "Mute";
+    cameraButton.innerText = isCameraOff ? "Camera On" : "Camera Off";
+}
+
+void ensureAutomaticEncryption().then(() => hydrateVisibleMessages()).catch((error) => {
+    console.error(error);
+    secureStatus.innerText = "Unable to enable automatic encryption for this signed-in account.";
+});
+
+function renderRemoteTile(userId, label) {
+    let panel = remoteVideoGrid.querySelector(`[data-user-id="${userId}"]`);
+    if (panel) return panel;
+    panel = document.createElement("div");
+    panel.className = "video-panel remote-panel";
+    panel.dataset.userId = userId;
+    panel.innerHTML = `
+        <video autoplay playsinline></video>
+        <button class="panel-expand-btn" type="button" aria-label="Expand ${escapeAttribute(label)} video">⛶</button>
+        <span class="video-label">${escapeHtml(label)}</span>
+    `;
+    panel.querySelector(".panel-expand-btn").addEventListener("click", () => {
+        togglePanelExpand(panel);
+    });
+    remoteVideoGrid.appendChild(panel);
+    return panel;
+}
+
+function removeRemoteTile(userId) {
+    const panel = remoteVideoGrid.querySelector(`[data-user-id="${userId}"]`);
+    if (panel) panel.remove();
+}
+
+function cleanupPeerConnection(targetUserId, {preserveCandidates = false} = {}) {
+    const key = String(targetUserId);
+    if (!preserveCandidates) {
+        pendingIceCandidates.delete(key);
+    }
+    const pc = peerConnections.get(key);
+    if (!pc) return;
+    pc.ontrack = null;
+    pc.onicecandidate = null;
+    pc.close();
+    peerConnections.delete(key);
+    removeRemoteTile(targetUserId);
+}
+
+function cleanupAllPeerConnections() {
+    Array.from(peerConnections.keys()).forEach((userId) => cleanupPeerConnection(userId));
+    pendingIceCandidates.clear();
+}
+
+function queueIceCandidate(targetUserId, candidate) {
+    const key = String(targetUserId);
+    const queue = pendingIceCandidates.get(key) || [];
+    queue.push(candidate);
+    pendingIceCandidates.set(key, queue);
+    videoCallStatus.innerText = "Preparing media connection…";
+}
+
+async function addIceCandidateForPeer(targetUserId, candidate) {
+    const key = String(targetUserId);
+    const pc = peerConnections.get(key);
+    if (!pc || !pc.remoteDescription) {
+        queueIceCandidate(targetUserId, candidate);
+        return;
+    }
+    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+}
+
+async function flushPendingIceCandidates(targetUserId) {
+    const key = String(targetUserId);
+    const pc = peerConnections.get(key);
+    const queuedCandidates = pendingIceCandidates.get(key) || [];
+    if (!pc || !pc.remoteDescription || !queuedCandidates.length) return;
+    pendingIceCandidates.delete(key);
+    for (const candidate of queuedCandidates) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    }
+    videoCallStatus.innerText = "Connecting media…";
+}
+
+async function createPeerConnection(targetUserId, targetLabel) {
+    cleanupPeerConnection(targetUserId, {preserveCandidates: true});
+    const stream = await ensureLocalStream();
+    const peerConnection = new RTCPeerConnection(rtcConfig);
+    stream.getTracks().forEach((track) => peerConnection.addTrack(track, stream));
+    const remotePanel = renderRemoteTile(targetUserId, targetLabel);
+    const remoteVideo = remotePanel.querySelector("video");
+    peerConnection.ontrack = (event) => {
+        const remoteStream = event.streams?.[0] || new MediaStream([event.track]);
+        void attachStreamToVideo(remoteVideo, remoteStream, {muted: false});
+        if (callState !== "live") {
+            setCallState("live", "Live video call");
+        }
+    };
+    peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+            if (activeCallMode === "conference" && activeConferenceRoomId) {
+                encryptSignalPayload({candidate: event.candidate}, targetUserId).then((securePayload) => {
+                    socket.emit("conference_ice_candidate", {room_id: activeConferenceRoomId, target_user_id: Number(targetUserId), ...securePayload});
+                }).catch((error) => console.error(error));
+            } else {
+                encryptSignalPayload({candidate: event.candidate}, targetUserId).then((securePayload) => {
+                    socket.emit("video_call_ice_candidate", {partner_id: Number(targetUserId), ...securePayload});
+                }).catch((error) => console.error(error));
+            }
+        }
+    };
+    peerConnection.onconnectionstatechange = () => {
+        if (peerConnection.connectionState === "connected") {
+            setCallState("live", activeCallMode === "conference" ? "Group conference is live" : "Live video call");
+        } else if (["failed", "disconnected"].includes(peerConnection.connectionState)) {
+            videoCallStatus.innerText = "Connection is unstable. Check mic/camera permission or network.";
+        }
+    };
+    peerConnection.oniceconnectionstatechange = () => {
+        if (["failed", "disconnected"].includes(peerConnection.iceConnectionState)) {
+            videoCallStatus.innerText = "Media connection failed. A TURN server may be needed on this network.";
+        }
+    };
+    peerConnections.set(String(targetUserId), peerConnection);
+    return peerConnection;
+}
+
+async function answerDirectOffer() {
+    if (!pendingDirectOffer) return;
+    const pc = await createPeerConnection(directCallTargetId, activeThreadName);
+    await pc.setRemoteDescription(new RTCSessionDescription(pendingDirectOffer));
+    await flushPendingIceCandidates(directCallTargetId);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit("video_call_answer", {
+        partner_id: Number(directCallTargetId),
+        ...(await encryptSignalPayload({answer}, directCallTargetId)),
+    });
+    pendingDirectOffer = null;
+    setCallState("live", "Live video call");
+}
+
+async function answerConferenceOffer(senderId, senderName, offer) {
+    const pc = await createPeerConnection(senderId, senderName);
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    await flushPendingIceCandidates(senderId);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit("conference_answer", {
+        room_id: activeConferenceRoomId,
+        target_user_id: Number(senderId),
+        ...(await encryptSignalPayload({answer}, senderId)),
+    });
+}
+
+async function startDirectOfferFlow() {
+    activeCallMode = "direct";
+    setIncomingBanner(false);
+    setCallState("connecting", "Starting camera and calling…");
+    const pc = await createPeerConnection(directCallTargetId, activeThreadName);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    socket.emit("video_call_offer", {
+        partner_id: Number(directCallTargetId),
+        ...(await encryptSignalPayload({offer}, directCallTargetId)),
+    });
+    setCallState("calling", "Calling…");
+}
+
+async function startConferenceWithSelectedParticipants(participantIds) {
+    activeCallMode = "conference";
+    activeConferenceRoomId = `conf-${currentUserId}-${Date.now()}`;
+    callModalTitle.innerText = "Group Conference";
+    setIncomingBanner(false);
+    setCallState("connecting", "Starting conference…");
+    await ensureLocalStream();
+    socket.emit("conference_start", {
+        room_id: activeConferenceRoomId,
+        participant_ids: participantIds,
+        room_label: `${currentUserName}'s conference`,
+    });
+}
+
+function resetCallUi(statusText = "Camera off. Start a call to connect.") {
+    setIncomingBanner(false);
+    callModalTitle.innerText = "Video Call";
+    setCallState("idle", statusText);
+}
+
+function endCurrentCall({notifyPeer = true, statusText = "Call ended"} = {}) {
+    if (notifyPeer && activeCallMode === "conference" && activeConferenceRoomId) {
+        socket.emit("conference_leave", {room_id: activeConferenceRoomId});
+    } else if (notifyPeer && activeCallMode === "direct") {
+        socket.emit("video_call_end", {partner_id: Number(directCallTargetId)});
+    }
+    cleanupAllPeerConnections();
+    stopLocalStream();
+    pendingDirectOffer = null;
+    pendingInvite = null;
+    activeConferenceRoomId = null;
+    activeCallMode = "idle";
+    isMuted = false;
+    isCameraOff = false;
+    updateMediaButtons();
+    resetCallUi(statusText);
+}
+
+function renderMessage(message) {
+    return `
+        <div class="chat-bubble ${message.side}" data-message-id="${message.id}">
+            <p class="message-body" data-raw-body="${escapeAttribute(message.raw_body || message.body || "")}" data-encrypted="${message.encrypted ? "1" : "0"}">${escapeHtml(message.body)}</p>
+            <div class="chat-meta">
+                <span>${escapeHtml(message.created_at)}</span>
+                ${message.status ? `<em class="message-status">${escapeHtml(message.status)}</em>` : ""}
+            </div>
+        </div>
+    `;
+}
+
+function renderMessages(messages, {prepend = false} = {}) {
+    const existingEmptyState = chatMessages.querySelector(".empty-state");
+    if (existingEmptyState) existingEmptyState.remove();
+    if (!messages.length && !chatMessages.querySelector(".chat-bubble")) {
+        loadOlderButton.insertAdjacentHTML("afterend", '<div class="empty-state">No messages yet. Start the conversation below.</div>');
+        return;
+    }
+
+    const html = messages.map(renderMessage).join("");
+    if (prepend) {
+        loadOlderButton.insertAdjacentHTML("afterend", html);
+    } else {
+        const existing = Array.from(chatMessages.querySelectorAll(".chat-bubble")).map((item) => Number(item.dataset.messageId));
+        messages.forEach((message) => {
+            if (!existing.includes(message.id)) {
+                chatMessages.insertAdjacentHTML("beforeend", renderMessage(message));
+            }
+        });
+    }
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    const incomingMessages = messages.filter((message) => message.side === "left");
+    if (incomingMessages.length) {
+        socket.emit("mark_read", socketPayload({partner_id: partnerId, up_to_id: incomingMessages[incomingMessages.length - 1].id}));
+    }
+    void hydrateVisibleMessages();
+}
+
+function setSendingState(isSending) {
+    isSendingMessage = isSending;
+    sendMessageButton.disabled = isSending;
+}
+
+async function submitEncryptedMessage() {
+    if (isSendingMessage) return;
+    const body = messageInput.value.trim();
+    if (!body) return;
+    const myDevices = devicesForUser(Number(currentUserId));
+    const partnerDevices = devicesForUser(Number(partnerId));
+    if (!myDevices.length || !partnerDevices.length) {
+        secureStatus.innerText = "This chat is waiting for secure account setup before sending encrypted messages.";
+        return;
+    }
+    setSendingState(true);
+    try {
+        const outboundBody = await encryptEnvelopeForDevices(body, [
+            ...myDevices.map((device) => ({deviceId: device.id, publicKey: device.public_key})),
+            ...partnerDevices.map((device) => ({deviceId: device.id, publicKey: device.public_key})),
+        ]);
+        socket.emit("send_message", socketPayload({partner_id: Number(partnerId), body: outboundBody}));
+        messageInput.value = "";
+        socket.emit("typing", socketPayload({partner_id: Number(partnerId), is_typing: false}));
+        window.setTimeout(() => {
+            if (isSendingMessage) {
+                setSendingState(false);
+            }
+        }, 2500);
+    } catch (error) {
+        console.error(error);
+        setSendingState(false);
+    }
+}
+
+async function loadOlderMessages() {
+    const firstBubble = chatMessages.querySelector(".chat-bubble");
+    const beforeId = firstBubble ? firstBubble.dataset.messageId : "";
+    const response = await fetch(`/chat/messages/${partnerId}?before_id=${beforeId}&limit={{ chat_limit }}`, {
+        headers: {"X-Requested-With": "fetch"}
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    renderMessages(data.messages, {prepend: true});
+    if (!data.has_more) {
+        loadOlderButton.disabled = true;
+        loadOlderButton.innerText = "No older messages";
+    }
+}
+
+chatForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await submitEncryptedMessage();
+});
+
+messageInput.addEventListener("input", () => {
+        socket.emit("typing", socketPayload({partner_id: Number(partnerId), is_typing: true}));
+    clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(() => {
+        socket.emit("typing", socketPayload({partner_id: Number(partnerId), is_typing: false}));
+    }, 900);
+});
+
+loadOlderButton.addEventListener("click", loadOlderMessages);
+
+resetSecureDeviceButton.addEventListener("click", async () => {
+    await resetDeviceKeys();
+    await hydrateVisibleMessages();
+});
+
+startCallButton.addEventListener("click", async () => {
+    try {
+        directCallTargetId = Number(partnerId);
+        activeCallMode = "direct";
+        callModalTitle.innerText = `Call with ${activeThreadName}`;
+        setCallState("connecting", "Starting camera…");
+        await ensureLocalStream();
+        setCallState("requesting", `Calling ${activeThreadName}…`);
+        socket.emit("video_call_invite", {partner_id: Number(directCallTargetId)});
+    } catch (error) {
+        console.error(error);
+        endCurrentCall({notifyPeer: false, statusText: "Camera or microphone access failed."});
+    }
+});
+
+acceptCallButton.addEventListener("click", async () => {
+    try {
+        await ensureLocalStream();
+        if (pendingInvite?.mode === "conference") {
+            activeCallMode = "conference";
+            activeConferenceRoomId = pendingInvite.roomId;
+            callModalTitle.innerText = pendingInvite.title || "Group Conference";
+            setIncomingBanner(false);
+            setCallState("connecting", "Joining conference…");
+            socket.emit("conference_join", {room_id: pendingInvite.roomId});
+        } else {
+            activeCallMode = "direct";
+            directCallTargetId = Number(pendingInvite?.callerId || partnerId);
+            callModalTitle.innerText = `Call with ${pendingInvite?.callerName || activeThreadName}`;
+            setIncomingBanner(false);
+            setCallState("connecting", "Joining call…");
+            socket.emit("video_call_accept", {partner_id: Number(directCallTargetId)});
+            if (pendingDirectOffer) {
+                await answerDirectOffer();
+            }
+        }
+        pendingInvite = null;
+    } catch (error) {
+        console.error(error);
+        if (pendingInvite?.mode === "conference" && pendingInvite?.roomId) {
+            socket.emit("conference_decline", {room_id: pendingInvite.roomId});
+        } else {
+            socket.emit("video_call_decline", {partner_id: Number(partnerId)});
+        }
+        endCurrentCall({notifyPeer: false, statusText: "Camera or microphone access failed."});
+    }
+});
+
+declineCallButton.addEventListener("click", () => {
+    if (pendingInvite?.mode === "conference" && pendingInvite?.roomId) {
+        socket.emit("conference_decline", {room_id: pendingInvite.roomId});
+    } else {
+        socket.emit("video_call_decline", {partner_id: Number(partnerId)});
+    }
+    pendingInvite = null;
+    pendingDirectOffer = null;
+    resetCallUi("Call declined.");
+});
+
+endCallButton.addEventListener("click", () => {
+    endCurrentCall({notifyPeer: true, statusText: "Call ended"});
+});
+
+muteButton.addEventListener("click", () => {
+    if (!localStream) return;
+    isMuted = !isMuted;
+    localStream.getAudioTracks().forEach((track) => {
+        track.enabled = !isMuted;
+    });
+    updateMediaButtons();
+});
+
+cameraButton.addEventListener("click", () => {
+    if (!localStream) return;
+    isCameraOff = !isCameraOff;
+    localStream.getVideoTracks().forEach((track) => {
+        track.enabled = !isCameraOff;
+    });
+    updateMediaButtons();
+});
+
+fullscreenButton.addEventListener("click", async () => {
+    if (!document.fullscreenElement) {
+        await callModal.requestFullscreen?.();
+    } else {
+        await document.exitFullscreen?.();
+    }
+});
+
+function openConferencePicker() {
+    conferencePickerModal.classList.remove("is-hidden");
+}
+
+function closeConferencePickerModal() {
+    conferencePickerModal.classList.add("is-hidden");
+    conferencePickerForm.reset();
+}
+
+startConferenceButton.addEventListener("click", openConferencePicker);
+closeConferencePicker.addEventListener("click", closeConferencePickerModal);
+cancelConferenceButton.addEventListener("click", closeConferencePickerModal);
+conferencePickerBackdrop.addEventListener("click", closeConferencePickerModal);
+
+conferencePickerForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const selected = Array.from(conferencePickerForm.querySelectorAll('input[name="participant_ids"]:checked')).map((input) => Number(input.value));
+    const participantIds = Array.from(new Set([Number(partnerId), ...selected]));
+    if (participantIds.length < 2) {
+        alert("Select at least one more partner to start a group conference.");
+        return;
+    }
+    closeConferencePickerModal();
+    try {
+        await startConferenceWithSelectedParticipants(participantIds);
+    } catch (error) {
+        console.error(error);
+        endCurrentCall({notifyPeer: false, statusText: "Unable to start conference."});
+    }
+});
+
+callModalBackdrop.addEventListener("click", () => {
+    if (callState !== "idle") {
+        endCurrentCall({notifyPeer: true, statusText: "Call ended"});
+    } else {
+        resetCallUi();
+    }
+});
+
+function handleSocketConnect() {
+    socket.emit("join_chat", socketPayload({partner_id: Number(partnerId)}));
+}
+
+function handleChatMessage(message) {
+    renderMessages([message]);
+    if (message.side === "right") {
+        setSendingState(false);
+    }
+}
+
+function handleTyping(payload) {
+    typingIndicator.innerText = payload.is_typing ? "Typing..." : "Accepted exchange partner";
+}
+
+function handleVideoCallInvite(payload) {
+    const callerId = Number(payload?.user_id || partnerId);
+    const caller = conferenceCandidates.find((candidate) => Number(candidate.id) === callerId);
+    const callerName = caller?.name || activeThreadName;
+    activeCallMode = "direct";
+    directCallTargetId = callerId;
+    callModalTitle.innerText = `Call with ${callerName}`;
+    pendingInvite = {mode: "direct", callerId, callerName};
+    setIncomingBanner(true, `${callerName} is calling`, "Join the live video session.");
+}
+
+async function handleVideoCallAccept() {
+    if (callState === "idle") return;
+    try {
+        await startDirectOfferFlow();
+    } catch (error) {
+        console.error(error);
+        endCurrentCall({notifyPeer: false, statusText: "Unable to start video call."});
+    }
+}
+
+function handleVideoCallDecline() {
+    endCurrentCall({notifyPeer: false, statusText: "{{ active_thread.name }} declined the call."});
+}
+
+async function handleVideoCallOffer(payload) {
+    try {
+        const senderId = Number(payload?.user_id || payload?.sender_id || directCallTargetId || partnerId);
+        if (senderId > 0) {
+            directCallTargetId = senderId;
+        }
+        const offerPayload = await decryptSignalPayload(payload);
+        pendingDirectOffer = offerPayload.offer;
+        if (callState === "connecting") {
+            await answerDirectOffer();
+            return;
+        }
+        if (callState !== "ringing") {
+            const caller = conferenceCandidates.find((candidate) => Number(candidate.id) === directCallTargetId);
+            const callerName = caller?.name || activeThreadName;
+            pendingInvite = {mode: "direct", callerId: directCallTargetId, callerName};
+            setIncomingBanner(true, `${callerName} is calling`, "Join the live video session.");
+        }
+    } catch (error) {
+        console.error(error);
+    }
+}
+
+async function handleVideoCallAnswer(payload) {
+    try {
+        const senderId = Number(payload?.user_id || payload?.sender_id || directCallTargetId);
+        if (senderId > 0) {
+            directCallTargetId = senderId;
+        }
+        const peerConnection = peerConnections.get(String(directCallTargetId));
+        if (!peerConnection) return;
+        const answerPayload = await decryptSignalPayload(payload);
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(answerPayload.answer));
+        await flushPendingIceCandidates(directCallTargetId);
+        setCallState("live", "Live video call");
+    } catch (error) {
+        console.error(error);
+        endCurrentCall({notifyPeer: false, statusText: "Unable to connect call."});
+    }
+}
+
+async function handleVideoCallIceCandidate(payload) {
+    try {
+        const senderId = Number(payload?.user_id || payload?.sender_id || directCallTargetId);
+        if (senderId > 0) {
+            directCallTargetId = senderId;
+        }
+        const candidatePayload = await decryptSignalPayload(payload);
+        if (!candidatePayload.candidate) return;
+        await addIceCandidateForPeer(directCallTargetId, candidatePayload.candidate);
+    } catch (error) {
+        console.error(error);
+    }
+}
+
+function handleVideoCallEnd() {
+    endCurrentCall({notifyPeer: false, statusText: "{{ active_thread.name }} ended the call."});
+}
+
+function handleConferenceInvite(payload) {
+    pendingInvite = {mode: "conference", roomId: payload.room_id, title: payload.room_label};
+    setIncomingBanner(true, `${payload.host_name} invited you`, `Join ${payload.room_label}.`);
+}
+
+async function handleConferenceJoined(payload) {
+    activeCallMode = "conference";
+    activeConferenceRoomId = payload.room_id;
+    callModalTitle.innerText = payload.room_label || "Group Conference";
+    setIncomingBanner(false);
+    setCallState("live", "Group conference is live");
+    const members = payload.members || [];
+    remoteVideoGrid.innerHTML = "";
+    members.filter((member) => member.id !== currentUserId).forEach((member) => {
+        renderRemoteTile(member.id, member.name);
+    });
+}
+
+async function handleConferenceParticipantJoined(payload) {
+    const participant = payload.participant;
+    if (!participant || participant.id === currentUserId || !activeConferenceRoomId) return;
+    renderRemoteTile(participant.id, participant.name);
+    try {
+        const pc = await createPeerConnection(participant.id, participant.name);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit("conference_offer", {
+            room_id: activeConferenceRoomId,
+            target_user_id: participant.id,
+            ...(await encryptSignalPayload({offer}, participant.id)),
+        });
+    } catch (error) {
+        console.error(error);
+    }
+}
+
+async function handleConferenceOffer(payload) {
+    try {
+        const offerPayload = await decryptSignalPayload(payload);
+        const member = conferenceCandidates.find((candidate) => candidate.id === payload.sender_id);
+        await answerConferenceOffer(payload.sender_id, member?.name || "Participant", offerPayload.offer);
+    } catch (error) {
+        console.error(error);
+    }
+}
+
+async function handleConferenceAnswer(payload) {
+    try {
+        const pc = peerConnections.get(String(payload.sender_id));
+        if (!pc) return;
+        const answerPayload = await decryptSignalPayload(payload);
+        await pc.setRemoteDescription(new RTCSessionDescription(answerPayload.answer));
+        await flushPendingIceCandidates(payload.sender_id);
+    } catch (error) {
+        console.error(error);
+    }
+}
+
+async function handleConferenceIceCandidate(payload) {
+    try {
+        const candidatePayload = await decryptSignalPayload(payload);
+        if (!candidatePayload.candidate) return;
+        await addIceCandidateForPeer(payload.sender_id, candidatePayload.candidate);
+    } catch (error) {
+        console.error(error);
+    }
+}
+
+function handleConferenceParticipantLeft(payload) {
+    if (!payload.user_id || payload.user_id === currentUserId) return;
+    cleanupPeerConnection(payload.user_id);
+}
+
+function handleConferenceDeclined() {
+    videoCallStatus.innerText = "One participant declined the conference invite.";
+}
+
+function handleMessageStatus(payload) {
+    payload.ids.forEach((id) => {
+        const bubble = chatMessages.querySelector(`[data-message-id="${id}"]`);
+        if (!bubble) return;
+        const status = bubble.querySelector(".message-status");
+        if (status) {
+            status.innerText = payload.status;
+        }
+    });
+}
+
+function handleChatError(payload) {
+    alert(payload.error);
+}
+
+async function handleDeviceRegistered(payload) {
+    if (Number(payload?.user_id) !== Number(currentUserId)) {
+        return;
+    }
+    try {
+        await fetchPeerDevices([Number(currentUserId), Number(partnerId)]);
+        updateSecureStatus();
+        await syncVisibleMessageKeys();
+    } catch (error) {
+        console.error(error);
+    }
+}
+
+const socketHandlers = [
+    ["connect", handleSocketConnect],
+    ["chat_message", handleChatMessage],
+    ["typing", handleTyping],
+    ["video_call_invite", handleVideoCallInvite],
+    ["video_call_accept", handleVideoCallAccept],
+    ["video_call_decline", handleVideoCallDecline],
+    ["video_call_offer", handleVideoCallOffer],
+    ["video_call_answer", handleVideoCallAnswer],
+    ["video_call_ice_candidate", handleVideoCallIceCandidate],
+    ["video_call_end", handleVideoCallEnd],
+    ["conference_invite", handleConferenceInvite],
+    ["conference_joined", handleConferenceJoined],
+    ["conference_participant_joined", handleConferenceParticipantJoined],
+    ["conference_offer", handleConferenceOffer],
+    ["conference_answer", handleConferenceAnswer],
+    ["conference_ice_candidate", handleConferenceIceCandidate],
+    ["conference_participant_left", handleConferenceParticipantLeft],
+    ["conference_declined", handleConferenceDeclined],
+    ["message_status", handleMessageStatus],
+    ["device_registered", handleDeviceRegistered],
+    ["chat_error", handleChatError],
+];
+
+function bindSocketHandlers() {
+    socketHandlers.forEach(([eventName, handler]) => {
+        socket.off(eventName, handler);
+        socket.on(eventName, handler);
+    });
+}
+
+bindSocketHandlers();
+
+window.addEventListener("skillswap:chat-notification", (event) => {
+    const payload = event.detail || {};
+    if (!payload.partner_id) return;
+    const thread = document.querySelector(`.chat-thread[data-thread-id="${payload.partner_id}"]`);
+    if (!thread) return;
+    const unreadDot = thread.querySelector(".unread-dot");
+    if (!unreadDot) return;
+    const threadUnread = payload.thread_unread || 0;
+    if (threadUnread > 0) {
+        unreadDot.textContent = threadUnread > 99 ? "99+" : String(threadUnread);
+        unreadDot.classList.remove("is-hidden");
+    } else {
+        unreadDot.textContent = "0";
+        unreadDot.classList.add("is-hidden");
+    }
+});
+
+window.addEventListener("beforeunload", () => {
+    if (callState !== "idle") endCurrentCall({notifyPeer: true, statusText: "Call ended"});
+    stopLocalStream();
+    cleanupAllPeerConnections();
+});
+</script>
+{% endif %}
+{% endblock %}

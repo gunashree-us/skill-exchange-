@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+skill_exchange.db
+.DS_Store
+.venv/
+venv/

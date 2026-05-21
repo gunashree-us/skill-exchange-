@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero-band">
+    <div class="shell hero-grid">
+        <div class="hero-copy">
+            <div class="mini-badge">✨ Join {{ stats.users }} Learners</div>
+            <p class="hero-tagline">Do you have a skill, or do you need a skill in exchange for coaching?</p>
+            <h1>Learn &amp; Share Skills Without Money</h1>
+            <p>Connect with others to exchange skills. Teach what you know, learn what you need, and build a community of knowledge sharers.</p>
+            <div class="hero-actions">
+                <a href="{{ url_for('register') }}" class="button button-dark">Start Learning →</a>
+                <a href="{{ url_for('login') }}" class="button button-outline">Explore Skills</a>
+            </div>
+            <div class="hero-trust">
+                <div class="avatar-row">
+                    <span class="avatar-dot">A</span>
+                    <span class="avatar-dot">B</span>
+                    <span class="avatar-dot">C</span>
+                    <span class="avatar-dot">D</span>
+                </div>
+                <div>
+                    <strong>{{ stats.requests }}</strong>
+                    <span>active today</span>
+                </div>
+                <div>
+                    <strong>{% if stats.platform_rating %}{{ stats.platform_rating }}/5{% else %}No ratings yet{% endif %}</strong>
+                    <span>platform rating</span>
+                </div>
+            </div>
+        </div>
+        <div class="hero-visual">
+            <div class="hero-photo"></div>
+            <div class="floating-badge badge-left">
+                <div class="badge-icon">◫</div>
+                <div>
+                    <strong>Web Dev</strong>
+                    <span>500+ teachers</span>
+                </div>
+            </div>
+            <div class="floating-badge badge-right">
+                <div class="badge-icon">◎</div>
+                <div>
+                    <strong>Marketing</strong>
+                    <span>350+ teachers</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="soft-band">
+    <div class="shell section-head">
+        <h2>Why Choose SkillSwap?</h2>
+        <p>A trusted platform for learning and teaching skills</p>
+    </div>
+    <div class="shell three-grid">
+        <article class="feature-card">
+            <div class="soft-icon">◫</div>
+            <h3>Teach Skills</h3>
+            <p>Share your expertise with others and help them grow.</p>
+        </article>
+        <article class="feature-card">
+            <div class="soft-icon">◌</div>
+            <h3>Learn Skills</h3>
+            <p>Discover new skills from experienced teachers.</p>
+        </article>
+        <article class="feature-card">
+            <div class="soft-icon">♡</div>
+            <h3>Connect with People</h3>
+            <p>Build meaningful relationships through skill exchange.</p>
+        </article>
+    </div>
+</section>
+
+<section class="white-band">
+    <div class="shell section-head">
+        <h2>Popular Skill Categories</h2>
+        <p>Explore skills in various fields</p>
+    </div>
+    <div class="shell category-grid">
+        {% for category in categories %}
+            <div class="category-chip">{{ category.category }}</div>
+        {% else %}
+            <div class="empty-state">No categories yet. They will appear once members start adding real skills.</div>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="soft-band">
+    <div class="shell section-head">
+        <h2>How It Works</h2>
+        <p>Get started in three simple steps</p>
+    </div>
+    <div class="shell three-grid steps-grid">
+        <article class="step-card">
+            <div class="step-number">1</div>
+            <h3>Create Profile</h3>
+            <p>Sign up and list the skills you offer and want to learn.</p>
+        </article>
+        <article class="step-card">
+            <div class="step-number">2</div>
+            <h3>Find Matches</h3>
+            <p>Get matched with people who have complementary skills.</p>
+        </article>
+        <article class="step-card">
+            <div class="step-number">3</div>
+            <h3>Start Learning</h3>
+            <p>Connect, schedule sessions, and exchange knowledge.</p>
+        </article>
+    </div>
+</section>
+
+<section class="white-band">
+    <div class="shell section-head">
+        <h2>What Our Community Says</h2>
+        <p>Join thousands of happy learners</p>
+    </div>
+    <div class="shell three-grid">
+        {% for item in testimonials %}
+            <article class="quote-card">
+                <div class="stars">★★★★★</div>
+                <p>"{{ item.quote }}"</p>
+                <strong>{{ item.name }}</strong>
+                <span>{{ item.role }}</span>
+            </article>
+        {% else %}
+            <div class="empty-state">Testimonials will appear here once real members start leaving public feedback.</div>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="cta-band">
+    <div class="shell cta-box">
+        <h2>Ready to Start Exchanging Skills?</h2>
+        <p>Join our community today and unlock endless learning opportunities.</p>
+        <a href="{{ url_for('register') }}" class="button button-dark">Get Started for Free →</a>
+    </div>
+</section>
+{% endblock %}

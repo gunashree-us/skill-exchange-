@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="soft-band page-band">
+    <div class="shell">
+        <div class="page-heading">
+            <h1>Admin Panel</h1>
+            <p>Manage users, monitor activity, and moderate the platform.</p>
+        </div>
+
+        <article class="surface-card">
+            <div class="section-with-action">
+                <div>
+                    <h2>Users</h2>
+                    <p>Showing {{ users|length }} of {{ total_users }} members.</p>
+                </div>
+                {% if total_pages > 1 %}
+                    <div class="match-actions">
+                        {% if page > 1 %}
+                            <a class="button button-light small-button" href="{{ url_for('admin', page=page - 1) }}">Previous</a>
+                        {% endif %}
+                        <span class="status-pill light">Page {{ page }} of {{ total_pages }}</span>
+                        {% if page < total_pages %}
+                            <a class="button button-light small-button" href="{{ url_for('admin', page=page + 1) }}">Next</a>
+                        {% endif %}
+                    </div>
+                {% endif %}
+            </div>
+            <div class="table-wrap">
+                <table class="clean-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Email</th>
+                            <th>Skills</th>
+                            <th>Requests</th>
+                            <th>Admin</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in users %}
+                            <tr>
+                                <td>{{ user.name }}</td>
+                                <td>{{ user.email }}</td>
+                                <td>{{ user.total_skills }}</td>
+                                <td>{{ user.total_requests }}</td>
+                                <td>{{ 'Yes' if user.is_admin else 'No' }}</td>
+                                <td>
+                                    {% if user.id != current_user.id %}
+                                        <form method="post" action="{{ url_for('toggle_admin', user_id=user.id) }}">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <input type="hidden" name="page" value="{{ page }}">
+                                            <button class="button button-light small-button" type="submit">Toggle Admin</button>
+                                        </form>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if total_pages > 1 %}
+                <div class="match-actions">
+                    {% if page > 1 %}
+                        <a class="button button-light small-button" href="{{ url_for('admin', page=page - 1) }}">Previous</a>
+                    {% endif %}
+                    <span class="status-pill light">Page {{ page }} of {{ total_pages }}</span>
+                    {% if page < total_pages %}
+                        <a class="button button-light small-button" href="{{ url_for('admin', page=page + 1) }}">Next</a>
+                    {% endif %}
+                </div>
+            {% endif %}
+        </article>
+
+        <article class="surface-card">
+            <h2>Recent Requests</h2>
+            <div class="list-stack">
+                {% for item in recent_requests %}
+                    <div class="request-line">
+                        <div>
+                            <strong>#{{ item.id }} {{ item.sender_name }} → {{ item.receiver_name }}</strong>
+                            <span>{{ item.created_at }}</span>
+                        </div>
+                        <span class="status-pill {{ item.status|lower }}">{{ item.status }}</span>
+                    </div>
+                {% endfor %}
+            </div>
+        </article>
+    </div>
+</section>
+{% endblock %}

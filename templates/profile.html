@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="soft-band page-band">
+    <div class="shell">
+        <article class="profile-hero-card">
+            <div class="profile-hero-main">
+                <div class="profile-avatar">
+                    {% if current_user.profile_photo_path %}
+                        <img src="{{ url_for('static', filename=current_user.profile_photo_path.replace('static/', '', 1)) }}" alt="{{ current_user.name }} profile photo">
+                    {% else %}
+                        {{ current_user.name[0]|upper if current_user.name else 'U' }}
+                    {% endif %}
+                </div>
+                <div class="profile-hero-copy">
+                    <h1>{{ current_user.name }}</h1>
+                    <div class="profile-rating">
+                        {% if profile_stats.rating_total %}
+                            ⭐ {{ profile_stats.rating }} ({{ profile_stats.rating_total }} review{{ '' if profile_stats.rating_total == 1 else 's' }})
+                        {% else %}
+                            No ratings yet
+                        {% endif %}
+                    </div>
+                    <p class="profile-bio">{{ current_user.bio or 'Add a short bio so other members know what you teach and what you want to learn.' }}</p>
+                    <div class="profile-meta">
+                        <span>📍 {{ current_user.availability or 'Add your location or availability' }}</span>
+                        <span>✉ {{ current_user.email }}</span>
+                        <span>📅 Joined {{ current_user.created_at[:7] if current_user.created_at else 'January 2026' }}</span>
+                    </div>
+                    <div class="profile-link-grid">
+                        <a class="profile-link-card {% if not current_user.github_url %}is-empty{% endif %}" href="{{ current_user.github_url or '#' }}" {% if current_user.github_url %}target="_blank" rel="noopener noreferrer"{% endif %}>
+                            <strong>⌘ GitHub</strong>
+                            <span>{{ current_user.github_url or 'Add your GitHub profile link' }}</span>
+                        </a>
+                        <a class="profile-link-card {% if not current_user.linkedin_url %}is-empty{% endif %}" href="{{ current_user.linkedin_url or '#' }}" {% if current_user.linkedin_url %}target="_blank" rel="noopener noreferrer"{% endif %}>
+                            <strong>in LinkedIn</strong>
+                            <span>{{ current_user.linkedin_url or 'Add your LinkedIn profile link' }}</span>
+                        </a>
+                    </div>
+                    <div class="profile-certifications">
+                        <strong>Certifications</strong>
+                        <p>{{ current_user.certifications or 'Add certificates, course completions, or proof of expertise to help other learners trust your profile.' }}</p>
+                    </div>
+
+                    <details class="profile-edit-panel">
+                        <summary class="profile-edit-toggle">Edit Profile</summary>
+                        <form method="post" class="profile-edit-box" enctype="multipart/form-data">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <div class="profile-photo-editor">
+                                <div class="profile-avatar setup-avatar">
+                                    {% if current_user.profile_photo_path %}
+                                        <img src="{{ url_for('static', filename=current_user.profile_photo_path.replace('static/', '', 1)) }}" alt="{{ current_user.name }} profile photo">
+                                    {% else %}
+                                        {{ current_user.name[0]|upper if current_user.name else 'U' }}
+                                    {% endif %}
+                                </div>
+                                <div class="upload-stack">
+                                    <label>Profile Photo</label>
+                                    <label class="upload-dropzone">
+                                        <span class="upload-dropzone-title">Drop a new image here or click to replace</span>
+                                        <span class="upload-dropzone-copy">PNG, JPG, JPEG, or WebP</span>
+                                        <input type="file" name="profile_photo" accept=".png,.jpg,.jpeg,.webp">
+                                    </label>
+                                </div>
+                            </div>
+                            <label>Bio
+                                <textarea name="bio" rows="4" placeholder="Tell others what you teach, what you're learning, and how you like to collaborate.">{{ current_user.bio }}</textarea>
+                            </label>
+                            <label>Location / Availability
+                                <input type="text" name="availability" value="{{ current_user.availability }}" placeholder="Weekends, evenings, remote or your city">
+                            </label>
+                            <label>GitHub Profile
+                                <input type="url" name="github_url" value="{{ current_user.github_url }}" placeholder="https://github.com/yourname">
+                            </label>
+                            <label>LinkedIn Profile
+                                <input type="url" name="linkedin_url" value="{{ current_user.linkedin_url }}" placeholder="https://www.linkedin.com/in/yourname">
+                            </label>
+                            <label>Certifications
+                                <textarea name="certifications" rows="4" placeholder="AWS Cloud Practitioner, Meta Front-End Certificate, Coursera UI/UX Specialization...">{{ current_user.certifications }}</textarea>
+                            </label>
+                            <div class="upload-stack">
+                                <label>Certificate Files</label>
+                                <label class="upload-dropzone">
+                                    <span class="upload-dropzone-title">Drop certificate files here or click to add more</span>
+                                    <span class="upload-dropzone-copy">PDF, PNG, JPG, JPEG, or WebP. Multiple files supported.</span>
+                                    <input type="file" name="certificate_files" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple>
+                                </label>
+                            </div>
+                            <div class="match-actions">
+                                <button class="button button-light" type="submit">Save Profile</button>
+                                {% if current_user.profile_photo_path %}
+                                    <button class="button button-outline" formaction="{{ url_for('delete_profile_photo') }}" formmethod="post" type="submit">Remove Photo</button>
+                                {% endif %}
+                            </div>
+                        </form>
+                    </details>
+                </div>
+            </div>
+        </article>
+
+        <div class="three-grid profile-stats-row">
+            <article class="metric-card">
+                <div class="soft-icon">↗</div>
+                <strong>{{ profile_stats.total_exchanges }}</strong>
+                <span>Total Exchanges</span>
+            </article>
+            <article class="metric-card">
+                <div class="soft-icon">↗</div>
+                <strong>{{ profile_stats.active_exchanges }}</strong>
+                <span>Active Exchanges</span>
+            </article>
+            <article class="metric-card">
+                <div class="soft-icon">↗</div>
+                <strong>{{ profile_stats.rating_total }}</strong>
+                <span>Reviews Received</span>
+            </article>
+        </div>
+
+        <article class="surface-card">
+            <h2>Skills I Teach</h2>
+            <div class="skill-stack">
+                {% for skill in teach_skills %}
+                    <div class="skill-banner">
+                        <div>
+                            <strong>{{ skill.name }}</strong>
+                            <span>{{ skill.category }}</span>
+                        </div>
+                        <div class="banner-end">
+                            <span class="status-pill dark">{{ skill.level }}</span>
+                        </div>
+                    </div>
+                {% else %}
+                    <div class="empty-state">No teaching skills yet.</div>
+                {% endfor %}
+            </div>
+        </article>
+
+        <article class="surface-card">
+            <h2>Skills I'm Learning</h2>
+            <div class="progress-stack">
+                {% for skill in learning_progress %}
+                    <div class="skill-banner">
+                        <div>
+                            <strong>{{ skill.name }}</strong>
+                            <span>{{ skill.category }}</span>
+                        </div>
+                        <span class="status-pill light">{{ skill.level }}</span>
+                    </div>
+                {% else %}
+                    <div class="empty-state">No learning goals yet.</div>
+                {% endfor %}
+            </div>
+        </article>
+
+        {% if achievements %}
+            <article class="surface-card">
+                <h2>Achievements</h2>
+                <div class="three-grid">
+                    {% for item in achievements %}
+                        <div class="achievement-card">
+                            <div class="soft-icon">◎</div>
+                            <strong>{{ item.title }}</strong>
+                            <span>{{ item.text }}</span>
+                        </div>
+                    {% endfor %}
+                </div>
+            </article>
+        {% endif %}
+
+        <article class="surface-card">
+            <h2>Uploaded Certificates</h2>
+            <div class="certificate-stack">
+                {% for certificate in certificate_files %}
+                    <div class="certificate-card">
+                        <div class="certificate-card-main">
+                            {% if certificate.is_image %}
+                                <img class="certificate-thumb" src="{{ url_for('static', filename=certificate.static_path) }}" alt="{{ certificate.file_name }}">
+                            {% else %}
+                                <div class="certificate-file-icon">PDF</div>
+                            {% endif %}
+                            <div class="device-copy">
+                                <strong><a href="{{ url_for('static', filename=certificate.static_path) }}" target="_blank" rel="noopener noreferrer">{{ certificate.file_name }}</a></strong>
+                                <span>Uploaded {{ certificate.created_label }}</span>
+                            </div>
+                        </div>
+                        <form method="post" action="{{ url_for('delete_certificate', certificate_id=certificate.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button class="button button-outline small-button" type="submit">Remove</button>
+                        </form>
+                    </div>
+                {% else %}
+                    <div class="empty-state">No certificate files uploaded yet. Add PDF or image proofs from your profile editor.</div>
+                {% endfor %}
+            </div>
+        </article>
+
+        <article class="surface-card">
+            <h2>Secure Chat Access</h2>
+            <p class="match-meta">Encrypted chats now follow your account after sign-in. These entries show browsers that recently unlocked your secure chat access.</p>
+            <div class="device-stack">
+                {% for device in trusted_devices %}
+                    <div class="device-card">
+                        <div class="device-card-main">
+                            <div class="soft-icon">⌁</div>
+                            <div class="device-copy">
+                                <strong>{{ device.label or 'Recent secure chat sign-in' }}</strong>
+                                <span>Fingerprint {{ device.fingerprint }}</span>
+                                <span>Last active {{ device.last_seen_label }}</span>
+                                <span>Added {{ device.created_label }}</span>
+                            </div>
+                        </div>
+                        <form method="post" action="{{ url_for('revoke_device', device_id=device.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button class="button button-outline small-button" type="submit">Revoke</button>
+                        </form>
+                    </div>
+                {% else %}
+                    <div class="empty-state">No secure chat activity yet. Open chat once on this browser after signing in to activate encrypted messaging here.</div>
+                {% endfor %}
+            </div>
+        </article>
+
+        <article class="surface-card">
+            <h2>Reviews &amp; Ratings</h2>
+            <div class="review-stack">
+                {% for review in reviews %}
+                    <div class="review-card">
+                        <div class="review-head">
+                            <strong>{{ review.name }}</strong>
+                            <span>{{ review.date_label }}</span>
+                        </div>
+                        <div class="stars">★★★★★</div>
+                        <p>{{ review.feedback or 'Great experience learning together. Highly recommended!' }}</p>
+                    </div>
+                {% else %}
+                    <div class="empty-state">No reviews yet. Complete a few exchanges and feedback will appear here.</div>
+                {% endfor %}
+            </div>
+        </article>
+    </div>
+</section>
+{% endblock %}

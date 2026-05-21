@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="soft-band page-band">
+    <div class="shell">
+        <div class="page-heading">
+            <h1>Manage Your Skills</h1>
+            <p>Shape your exchange profile: what you can teach, what you want to learn, and how others should connect with you.</p>
+        </div>
+
+        <article class="surface-card add-skill-panel">
+            <div class="form-intro">
+                <span class="form-kicker">New skill</span>
+                <h2>Add a skill to your exchange profile</h2>
+                <p>Keep it specific so matches understand exactly what you can teach or want to learn.</p>
+            </div>
+            <form method="post" action="{{ url_for('add_skill') }}" class="skill-form-grid">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label>Skill Name
+                    <input type="text" name="name" placeholder="Web Development" required>
+                </label>
+                <label>Category
+                    <select name="category">
+                        {% for category in categories %}
+                            <option value="{{ category }}">{{ category }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>Type
+                    <select name="skill_type">
+                        <option value="teach">Teach</option>
+                        <option value="learn">Learn</option>
+                    </select>
+                </label>
+                <label>Level
+                    <select name="level">
+                        <option>Beginner</option>
+                        <option>Intermediate</option>
+                        <option>Advanced</option>
+                    </select>
+                </label>
+                <div class="form-submit-row">
+                    <button class="button button-dark" type="submit">+ Add Skill</button>
+                </div>
+            </form>
+        </article>
+
+        <div class="section-with-action section-offer">
+            <span class="section-icon">↗</span>
+            <div>
+                <h2>Skills You Offer</h2>
+                <p>Show what you can confidently teach others.</p>
+            </div>
+        </div>
+        <div class="two-grid">
+            {% for skill in teach_skills %}
+                <article class="editable-skill-card teach-card">
+                    <div class="editable-head">
+                        <div>
+                            <span class="skill-card-label">Teaching</span>
+                            <strong>{{ skill.name }}</strong>
+                        </div>
+                        <form method="post" action="{{ url_for('delete_skill', user_skill_id=skill.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button class="icon-link delete-link" type="submit" aria-label="Delete {{ skill.name }}">🗑</button>
+                        </form>
+                    </div>
+                    <div class="tag-row">
+                        <span class="tag-chip">{{ skill.category }}</span>
+                        <span class="status-pill dark">{{ skill.level }}</span>
+                    </div>
+                    <p>{{ current_user.bio or 'Describe your experience and what someone will learn from you.' }}</p>
+                </article>
+            {% else %}
+                <div class="empty-state">No teaching skills yet.</div>
+            {% endfor %}
+        </div>
+
+        <div class="section-with-action section-learn">
+            <span class="section-icon">◎</span>
+            <div>
+                <h2>Skills You Want to Learn</h2>
+                <p>List learning goals so the right teachers can find you.</p>
+            </div>
+        </div>
+        <div class="two-grid">
+            {% for skill in learn_skills %}
+                <article class="editable-skill-card learn-card">
+                    <div class="editable-head">
+                        <div>
+                            <span class="skill-card-label">Learning</span>
+                            <strong>{{ skill.name }}</strong>
+                        </div>
+                        <form method="post" action="{{ url_for('delete_skill', user_skill_id=skill.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button class="icon-link delete-link" type="submit" aria-label="Delete {{ skill.name }}">🗑</button>
+                        </form>
+                    </div>
+                    <div class="tag-row">
+                        <span class="tag-chip">{{ skill.category }}</span>
+                        <span class="status-pill blue">{{ skill.level }}</span>
+                    </div>
+                    <p>{{ current_user.availability or 'Set your availability so teachers know when to schedule sessions.' }}</p>
+                </article>
+            {% else %}
+                <div class="empty-state">No learning goals yet.</div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endblock %}

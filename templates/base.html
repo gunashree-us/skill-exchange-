@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en" class="{% if current_user %}app-html{% else %}marketing-html{% endif %}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SkillSwap</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css', v=style_version) }}">
+    {% if current_user %}
+        <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+    {% endif %}
+    <script>
+        if ("scrollRestoration" in history) {
+            history.scrollRestoration = "manual";
+        }
+
+        function forceScrollTop() {
+            document.documentElement.scrollTop = 0;
+            document.body.scrollTop = 0;
+            window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        }
+
+        function runNavReset(duration = 900) {
+            forceScrollTop();
+            requestAnimationFrame(() => {
+                forceScrollTop();
+                requestAnimationFrame(forceScrollTop);
+            });
+
+            [0, 50, 150, 300, 600].forEach((delay) => {
+                window.setTimeout(forceScrollTop, delay);
+            });
+
+            const startedAt = Date.now();
+            function tick() {
+                forceScrollTop();
+                if (Date.now() - startedAt < duration) {
+                    requestAnimationFrame(tick);
+                }
+            }
+            requestAnimationFrame(tick);
+        }
+
+        function shouldResetAppScroll() {
+            return document.documentElement.classList.contains("app-html");
+        }
+
+        if (shouldResetAppScroll()) {
+            runNavReset(1200);
+            window.addEventListener("DOMContentLoaded", () => runNavReset(1200));
+            window.addEventListener("load", () => runNavReset(1200));
+            window.addEventListener("pageshow", () => runNavReset(1200));
+        }
+    </script>
+</head>
+<body class="{% if current_user %}app-shell{% else %}marketing-shell{% endif %}">
+    <header class="topbar">
+        <div class="shell">
+            <div class="topbar-inner">
+                <a href="{{ url_for('index') }}" class="brand-mark" data-reset-scroll="true">
+                    <span class="brand-icon">◜</span>
+                    <span class="brand-text">SkillSwap</span>
+                </a>
+
+                {% if current_user %}
+                    <button
+                        class="nav-toggle"
+                        type="button"
+                        id="navToggle"
+                        aria-label="Toggle navigation"
+                        aria-expanded="false"
+                        aria-controls="mainNav"
+                    >
+                        ☰
+                    </button>
+                    <nav class="main-nav" id="mainNav">
+                        <a href="{{ url_for('dashboard') }}" class="nav-pill {% if active_page == 'dashboard' %}active{% endif %}" data-reset-scroll="true">Dashboard</a>
+                        <a href="{{ url_for('skills') }}" class="nav-pill {% if active_page == 'skills' %}active{% endif %}" data-reset-scroll="true">Skills</a>
+                        <a href="{{ url_for('matches') }}" class="nav-pill {% if active_page == 'match' %}active{% endif %}" data-reset-scroll="true">Match</a>
+                        <a href="{{ url_for('chat') }}" class="nav-pill nav-pill-chat {% if active_page == 'chat' %}active{% endif %}" data-reset-scroll="true">
+                            <span>Chat</span>
+                            {% if chat_unread_total %}
+                                <span class="nav-unread-badge" id="navUnreadBadge">{{ chat_unread_total }}</span>
+                            {% else %}
+                                <span class="nav-unread-badge is-hidden" id="navUnreadBadge">0</span>
+                            {% endif %}
+                        </a>
+                        <a href="{{ url_for('profile') }}" class="nav-pill {% if active_page == 'profile' %}active{% endif %}" data-reset-scroll="true">Profile</a>
+                    </nav>
+                    <div class="topbar-actions">
+                        {% if current_user.is_admin %}
+                            <a href="{{ url_for('admin') }}" class="ghost-link" data-reset-scroll="true">Admin</a>
+                        {% endif %}
+                        <a href="{{ url_for('logout') }}" class="ghost-link" data-reset-scroll="true">Logout</a>
+                    </div>
+                {% else %}
+                    <div class="topbar-actions">
+                        <a href="{{ url_for('login') }}" class="button button-dark" data-reset-scroll="true">Sign In</a>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </header>
+
+    <main class="page-wrap">
+        <div class="shell">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="flash-stack">
+                        {% for category, message in messages %}
+                            <div class="flash flash-{{ category }}">{{ message }}</div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+        </div>
+        {% block content %}{% endblock %}
+    </main>
+    {% if current_user %}
+    <script>
+        const navToggle = document.getElementById("navToggle");
+        const topbarInner = document.querySelector(".topbar-inner");
+        const mainNav = document.getElementById("mainNav");
+        const navUnreadBadge = document.getElementById("navUnreadBadge");
+        const defaultTitle = document.title;
+
+        if (navToggle && topbarInner && mainNav) {
+            const closeNav = () => {
+                topbarInner.classList.remove("nav-open");
+                navToggle.setAttribute("aria-expanded", "false");
+            };
+
+            navToggle.addEventListener("click", () => {
+                const shouldOpen = !topbarInner.classList.contains("nav-open");
+                topbarInner.classList.toggle("nav-open", shouldOpen);
+                navToggle.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+            });
+
+            mainNav.querySelectorAll("a").forEach((link) => {
+                link.addEventListener("click", closeNav);
+            });
+
+            window.addEventListener("resize", () => {
+                if (window.innerWidth > 900) {
+                    closeNav();
+                }
+            });
+        }
+
+        function updateNavUnread(totalUnread) {
+            if (!navUnreadBadge) return;
+            if (totalUnread > 0) {
+                navUnreadBadge.textContent = totalUnread > 99 ? "99+" : String(totalUnread);
+                navUnreadBadge.classList.remove("is-hidden");
+                document.title = `(${totalUnread}) ${defaultTitle}`;
+            } else {
+                navUnreadBadge.textContent = "0";
+                navUnreadBadge.classList.add("is-hidden");
+                document.title = defaultTitle;
+            }
+        }
+
+        window.skillSwapNotificationSocket = window.skillSwapNotificationSocket || io();
+        window.skillSwapNotificationSocket.on("connect", () => {
+            window.skillSwapNotificationSocket.emit("register_notifications");
+        });
+        window.skillSwapNotificationSocket.on("chat_notification", (payload) => {
+            updateNavUnread(payload.total_unread || 0);
+            window.dispatchEvent(new CustomEvent("skillswap:chat-notification", { detail: payload }));
+        });
+
+        updateNavUnread({{ chat_unread_total or 0 }});
+    </script>
+    {% endif %}
+</body>
+</html>

@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% macro recommendation_card(person, mode='discover') %}
+    <article class="match-card">
+        <div class="match-head">
+            <div class="avatar-circle large">{{ person.initials }}</div>
+            <div class="match-head-copy">
+                <div class="match-title-cluster">
+                    <h3>{{ person.name }}</h3>
+                    <span class="match-score {% if person.match_score >= 56 %}is-strong{% elif person.match_score >= 47 %}is-medium{% else %}is-soft{% endif %}">{{ person.match_score }}% fit</span>
+                    {% if person.avg_rating %}
+                        <span class="match-rating">⭐ {{ person.avg_rating }}</span>
+                    {% endif %}
+                </div>
+                <div class="match-meta-line">
+                    <span class="meta-badge">{{ person.availability or 'Flexible' }}</span>
+                    {% if person.shared_count %}
+                        <span class="meta-divider"></span>
+                        <span class="meta-badge">{{ person.shared_count }} shared</span>
+                    {% endif %}
+                    {% for reason in person.reason_labels %}
+                        {% set compact_reason = reason
+                            |replace('Active in ', '')
+                            |replace(' shared category', ' category')
+                            |replace(' shared categories', ' categories')
+                            |replace(' relevant skills', ' skills')
+                        %}
+                        <span class="meta-divider"></span>
+                        <span class="meta-badge">{{ compact_reason }}</span>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <div class="match-skill-row">
+            {% if person.offers %}
+                <div class="skill-pill-group offer-pill-group">
+                    {% for item in person.offers[:2] %}
+                        <span class="tag-chip offer-chip">offers {{ item }}</span>
+                    {% endfor %}
+                </div>
+            {% endif %}
+            {% if person.offers and person.wants %}
+                <span class="match-swap-arrow">→</span>
+            {% endif %}
+            {% if person.wants %}
+                <div class="skill-pill-group want-pill-group">
+                    {% for item in person.wants[:2] %}
+                        <span class="tag-chip want-chip">wants {{ item }}</span>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </div>
+
+        {% if person.user_id and person.request_teach_skill_id and person.request_learn_skill_id %}
+            <form method="post" action="{{ url_for('send_request', receiver_id=person.user_id) }}" class="request-compose">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="teach_skill_id" value="{{ person.request_teach_skill_id }}">
+                <input type="hidden" name="learn_skill_id" value="{{ person.request_learn_skill_id }}">
+                <input type="hidden" name="request_mode" value="{{ person.request_mode or 'mutual' }}">
+                <div class="match-footer-row">
+                    <div class="match-actions">
+                        <button class="button button-dark" type="submit">{% if person.request_mode == 'intro' %}Send Intro{% else %}Request Exchange{% endif %}</button>
+                        <a href="{{ url_for('browse', q=person.name) }}" class="button button-light">Open</a>
+                    </div>
+                    <button class="match-toggle js-match-toggle" type="button" aria-expanded="false">
+                        <span class="toggle-closed">Details</span>
+                        <span class="toggle-open">Less</span>
+                        <span class="match-toggle-icon">▾</span>
+                    </button>
+                </div>
+                <div class="match-details-panel is-collapsed">
+                    <p class="match-bio">{{ person.bio }}</p>
+                    <div class="request-grid compact-request-grid">
+                        <label>You're offering
+                            <input type="text" value="{{ person.request_teach_skill_name }}" readonly tabindex="-1">
+                        </label>
+                        <label>You're learning
+                            <input type="text" value="{{ person.request_learn_skill_name }}" readonly tabindex="-1">
+                        </label>
+                        <label>Proposed time
+                            <input type="datetime-local" name="proposed_time">
+                        </label>
+                        <label>Duration
+                            <select name="duration_minutes">
+                                {% for duration in durations %}
+                                    <option value="{{ duration }}">{{ duration }} min</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                        <label class="full-span">Message
+                            <textarea name="message" rows="2" placeholder="Tell them what you want to learn and how you can help."></textarea>
+                        </label>
+                        <label class="full-span">Scheduling note
+                            <input type="text" name="schedule_note" placeholder="Weekends after 5 PM works for me">
+                        </label>
+                    </div>
+                </div>
+            </form>
+        {% else %}
+            <div class="match-footer-row">
+                <div class="match-actions">
+                    <a href="{{ url_for('skills') }}" class="button button-dark">Refine Skills</a>
+                    <a href="{{ url_for('browse', q=person.name) }}" class="button button-light">Open</a>
+                </div>
+                <button class="match-toggle js-match-toggle" type="button" aria-expanded="false">
+                    <span class="toggle-closed">Details</span>
+                    <span class="toggle-open">Less</span>
+                    <span class="match-toggle-icon">▾</span>
+                </button>
+            </div>
+            <div class="match-details-panel is-collapsed">
+                {% if person.bio %}
+                    <p class="match-bio">{{ person.bio }}</p>
+                {% endif %}
+                <p class="match-meta">
+                    {% if not my_teach %}
+                        Add a skill you can teach first, then you can send exchange requests from these cards.
+                    {% elif not my_learn %}
+                        Add a learning goal first, then you can send exchange requests from these cards.
+                    {% else %}
+                        This suggestion is relevant, but it still needs a reciprocal teach/learn pairing before you can send an exchange request.
+                    {% endif %}
+                </p>
+            </div>
+        {% endif %}
+    </article>
+{% endmacro %}
+
+{% block content %}
+<section class="soft-band page-band">
+    <div class="shell">
+        <div class="page-heading matches-page-heading">
+            <h1>Discover Your Best Skill Exchange Fits</h1>
+            <p>See strict barter-ready matches first, then explore teachers, learners, and trending people in your interest areas.</p>
+        </div>
+
+        <article class="surface-card search-shell matches-filter-shell">
+            <form method="get" class="search-form matches-search-form">
+                <input type="text" name="q" value="{{ term }}" placeholder="Search by skill or name...">
+                <select name="category">
+                    <option value="">All categories</option>
+                    {% for category in categories %}
+                        <option value="{{ category }}" {% if selected_category == category %}selected{% endif %}>{{ category }}</option>
+                    {% endfor %}
+                </select>
+                <select name="level">
+                    <option value="">All levels</option>
+                    <option value="Beginner" {% if selected_level == 'Beginner' %}selected{% endif %}>Beginner</option>
+                    <option value="Intermediate" {% if selected_level == 'Intermediate' %}selected{% endif %}>Intermediate</option>
+                    <option value="Advanced" {% if selected_level == 'Advanced' %}selected{% endif %}>Advanced</option>
+                </select>
+                <select name="min_rating">
+                    <option value="0" {% if not min_rating %}selected{% endif %}>Any rating</option>
+                    <option value="3" {% if min_rating == 3 %}selected{% endif %}>3.0+</option>
+                    <option value="4" {% if min_rating == 4 %}selected{% endif %}>4.0+</option>
+                    <option value="4.5" {% if min_rating == 4.5 %}selected{% endif %}>4.5+</option>
+                </select>
+                <input type="text" name="availability" value="{{ availability_filter }}" placeholder="Availability contains...">
+                <button class="button button-light" type="submit">Apply Filters</button>
+            </form>
+            <div class="filter-pills">
+                <a href="{{ url_for('matches') }}" class="tag-chip {% if not selected_category %}active{% endif %}">All</a>
+                {% for category in categories %}
+                    <a href="{{ url_for('matches', q=term, category=category, level=selected_level, min_rating=min_rating, availability=availability_filter) }}" class="tag-chip {% if selected_category == category %}active{% endif %}">{{ category }}</a>
+                {% endfor %}
+            </div>
+        </article>
+
+        {% if not my_teach %}
+            <article class="surface-card">
+                <div class="page-heading">
+                    <h2>You need one teach skill before sending requests</h2>
+                    <p>Right now your profile only has learning goals. Add at least one skill you can teach, then these recommendation cards will unlock request actions.</p>
+                </div>
+                <div class="match-actions">
+                    <a href="{{ url_for('skills') }}" class="button button-dark">Add A Teach Skill</a>
+                    <a href="{{ url_for('browse') }}" class="button button-light">Browse Members</a>
+                </div>
+            </article>
+        {% endif %}
+
+        <div class="recommendation-feed">
+            <section class="recommendation-section">
+                <div class="section-with-action">
+                    <span class="section-icon">⇄</span>
+                    <div>
+                        <h2>Top Mutual Matches</h2>
+                        <p>Strict barter-ready suggestions where both sides already offer real value to each other.</p>
+                    </div>
+                </div>
+                <div class="recommendation-list">
+                    {% for match in matches %}
+                        {{ recommendation_card(match, 'mutual') }}
+                    {% else %}
+                        <div class="empty-state">No mutual matches yet. Add both teach and learn skills to unlock barter-ready suggestions.</div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <section class="recommendation-section">
+                <div class="section-with-action">
+                    <span class="section-icon">↗</span>
+                    <div>
+                        <h2>Suggested Teachers</h2>
+                        <p>People who already teach what you want, even if they do not need your skill yet.</p>
+                    </div>
+                </div>
+                <div class="recommendation-list">
+                    {% for teacher in suggested_teachers %}
+                        {{ recommendation_card(teacher) }}
+                    {% else %}
+                        <div class="empty-state">No teacher suggestions yet. Add learning goals to start building this feed.</div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <section class="recommendation-section">
+                <div class="section-with-action">
+                    <span class="section-icon">◎</span>
+                    <div>
+                        <h2>Suggested Learners</h2>
+                        <p>People who already want what you can teach, even if you do not need something from them yet.</p>
+                    </div>
+                </div>
+                <div class="recommendation-list">
+                    {% for learner in suggested_learners %}
+                        {{ recommendation_card(learner) }}
+                    {% else %}
+                        <div class="empty-state">No learner suggestions yet. Add more teaching skills so the platform can suggest learners.</div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <section class="recommendation-section">
+                <div class="section-with-action">
+                    <span class="section-icon">✦</span>
+                    <div>
+                        <h2>Trending In Your Interests</h2>
+                        <p>Active people working inside the same categories you care about, even before a direct exchange is ready.</p>
+                    </div>
+                </div>
+                <div class="recommendation-list">
+                    {% for person in trending_people %}
+                        {{ recommendation_card(person) }}
+                    {% else %}
+                        <div class="empty-state">No trending recommendations yet. Add a few more skills to shape your interest graph.</div>
+                    {% endfor %}
+                </div>
+            </section>
+        </div>
+    </div>
+</section>
+<script>
+document.querySelectorAll(".js-match-toggle").forEach((toggleButton) => {
+    toggleButton.addEventListener("click", () => {
+        const card = toggleButton.closest(".match-card");
+        const panel = card?.querySelector(".match-details-panel");
+        if (!panel) return;
+        const isCollapsed = panel.classList.contains("is-collapsed");
+        panel.classList.toggle("is-collapsed", !isCollapsed);
+        toggleButton.setAttribute("aria-expanded", String(isCollapsed));
+        card.classList.toggle("is-expanded", isCollapsed);
+    });
+});
+</script>
+{% endblock %}

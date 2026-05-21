@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="auth-band">
+    <div class="shell auth-shell">
+        <div class="auth-card">
+            <div class="auth-logo">◜</div>
+            <h1>Create Account</h1>
+            <p>Join SkillSwap and start exchanging skills</p>
+            <form method="post" class="stack-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label>Full Name
+                    <input type="text" name="name" placeholder="Sarah Johnson" required>
+                </label>
+                <label>Email
+                    <input type="email" name="email" placeholder="you@example.com" required>
+                </label>
+                <label>Password
+                    <input type="password" name="password" id="registerPasswordInput" placeholder="Create a password" required>
+                </label>
+                <button class="button button-dark full-width" type="submit">Create Account</button>
+            </form>
+            <p class="auth-switch">Already have an account? <a href="{{ url_for('login') }}">Sign In</a></p>
+        </div>
+    </div>
+</section>
+<script>
+document.querySelector(".stack-form")?.addEventListener("submit", () => {
+    const passwordInput = document.getElementById("registerPasswordInput");
+    if (passwordInput?.value) {
+        sessionStorage.setItem("skillswap:last-login-password", passwordInput.value);
+    }
+});
+</script>
+{% endblock %}

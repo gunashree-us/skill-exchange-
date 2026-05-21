@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="soft-band page-band">
+    <div class="shell">
+        <div class="dashboard-stack">
+            <div class="page-heading dashboard-heading">
+                <h1>Welcome back, {{ current_user.name.split()[0] if current_user.name else 'Learner' }}! 👋</h1>
+                <p>Ready to continue your learning journey?</p>
+            </div>
+
+            {% if show_onboarding %}
+                <section class="dashboard-section dashboard-section-onboarding">
+                    <article class="surface-card onboarding-card">
+                        <div class="card-title-row">
+                            <div>
+                                <h2>Get Your First Exchange Running</h2>
+                                <p>Finish these steps to unlock better matches and live chat.</p>
+                            </div>
+                            <span class="status-pill light">{{ onboarding_steps|selectattr('done')|list|length }}/{{ onboarding_steps|length }} done</span>
+                        </div>
+                        <div class="onboarding-list">
+                            {% for step in onboarding_steps %}
+                                <div class="onboarding-item {% if step.done %}done{% endif %}">
+                                    <div>
+                                        <strong>{{ step.title }}</strong>
+                                        <span>{% if step.done %}Completed{% else %}Next step{% endif %}</span>
+                                    </div>
+                                    <a href="{{ step.href }}" class="button {% if step.done %}button-light{% else %}button-dark{% endif %} small-button">{{ step.cta }}</a>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </article>
+                </section>
+            {% endif %}
+
+            <section class="dashboard-section dashboard-section-stats">
+                <div class="stats-row four-grid">
+                    <article class="metric-card">
+                        <div class="soft-icon">◫</div>
+                        <strong>{{ stats.skills_offered }}</strong>
+                        <span>Skills Offered</span>
+                    </article>
+                    <article class="metric-card">
+                        <div class="soft-icon">↗</div>
+                        <strong>{{ stats.active_exchanges }}</strong>
+                        <span>Active Exchanges</span>
+                    </article>
+                    <article class="metric-card">
+                        <div class="soft-icon">◎</div>
+                        <strong>{{ stats.students }}</strong>
+                        <span>Total Students</span>
+                    </article>
+                    <article class="metric-card">
+                        <div class="soft-icon">☆</div>
+                        <strong>{{ stats.rating if stats.rating else 'New' }}</strong>
+                        <span>Your Rating</span>
+                    </article>
+                </div>
+            </section>
+
+            <section class="dashboard-section dashboard-section-skills">
+                <div class="two-col-layout">
+                    <article class="surface-card">
+                        <div class="card-title-row">
+                            <h2>Skills You Offer</h2>
+                            <a href="{{ url_for('skills') }}" class="icon-button">+</a>
+                        </div>
+                        <div class="skill-stack">
+                            {% for skill in teach_skills %}
+                                <div class="skill-banner">
+                                    <div>
+                                        <strong>{{ skill.name }}</strong>
+                                        <span>{% if skill.students_count %}{{ skill.students_count }} active learner{{ '' if skill.students_count == 1 else 's' }}{% else %}0 learners yet{% endif %}</span>
+                                    </div>
+                                    <span class="status-pill dark">{{ skill.level }}</span>
+                                </div>
+                            {% else %}
+                                <div class="dashboard-card-placeholder">
+                                    <p>No skills added yet. Open Skills to add what you can teach.</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </article>
+
+                    <article class="surface-card">
+                        <div class="card-title-row">
+                            <h2>Skills You Want to Learn</h2>
+                            <a href="{{ url_for('skills') }}" class="icon-button">+</a>
+                        </div>
+                        <div class="skill-stack">
+                            {% for skill in learn_skills %}
+                                <div class="skill-banner">
+                                    <div>
+                                        <strong>{{ skill.name }}</strong>
+                                        <span>Find teachers →</span>
+                                    </div>
+                                    <span class="status-pill light">{{ skill.level }}</span>
+                                </div>
+                            {% else %}
+                                <div class="dashboard-card-placeholder">
+                                    <p>No learning goals yet. Add a few in Skills to get matches.</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </article>
+                </div>
+            </section>
+
+            <section class="dashboard-section dashboard-section-discovery">
+                <div class="two-col-layout">
+                    <article class="surface-card">
+                        <div class="card-title-row">
+                            <h2>Suggested Teachers</h2>
+                            <span class="card-title-spacer" aria-hidden="true"></span>
+                        </div>
+                        <div class="list-stack">
+                            {% for teacher in recommendation_feed.suggested_teachers %}
+                                <div class="list-item">
+                                    <div>
+                                        <strong>{{ teacher.name }}</strong>
+                                        <span>Can teach {{ teacher.offers|join(', ') }}</span>
+                                    </div>
+                                </div>
+                            {% else %}
+                                <div class="dashboard-card-placeholder">
+                                    <p>No teacher suggestions yet. Add learning goals to see people who can help you next.</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </article>
+
+                    <article class="surface-card">
+                        <div class="card-title-row">
+                            <h2>Top Mutual Matches</h2>
+                            <span class="card-title-spacer" aria-hidden="true"></span>
+                        </div>
+                        <div class="partner-stack">
+                            {% for partner in suggested_partners %}
+                                <div class="partner-card">
+                                    <div class="partner-head">
+                                        <div class="avatar-circle">{{ partner.initials }}</div>
+                                        <div>
+                                            <strong>{{ partner.name }}</strong>
+                                            <span>{% if partner.avg_rating %}⭐ {{ partner.avg_rating }} · {% endif %}{{ partner.match_score }}% match · {{ partner.mutual_exchange_count }} mutual fit</span>
+                                        </div>
+                                    </div>
+                                    <div class="tag-row">
+                                        {% for reason in partner.reason_labels %}
+                                            <span class="tag-chip">{{ reason }}</span>
+                                        {% endfor %}
+                                    </div>
+                                    <p>Offers: <strong>{{ partner.offer_name }}</strong></p>
+                                    <p>Wants: <strong>{{ partner.want_name }}</strong></p>
+                                    {% if partner.user_id %}
+                                        <form method="post" action="{{ url_for('send_request', receiver_id=partner.user_id) }}" class="request-compose compact">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <input type="hidden" name="teach_skill_id" value="{{ partner.request_teach_skill_id }}">
+                                            <input type="hidden" name="learn_skill_id" value="{{ partner.request_learn_skill_id }}">
+                                            <input type="datetime-local" name="proposed_time">
+                                            <select name="duration_minutes">
+                                                {% for duration in durations %}
+                                                    <option value="{{ duration }}">{{ duration }} min</option>
+                                                {% endfor %}
+                                            </select>
+                                            <input type="text" name="schedule_note" placeholder="When are you free?">
+                                            <button class="button button-dark full-width" type="submit">Request Exchange</button>
+                                        </form>
+                                    {% endif %}
+                                </div>
+                            {% else %}
+                                <div class="dashboard-card-placeholder">
+                                    <p>No exchange partners yet. Add both teach and learn skills to create real matches.</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </article>
+                </div>
+
+                <div class="two-col-layout">
+                    <article class="surface-card">
+                        <div class="card-title-row">
+                            <h2>Suggested Learners</h2>
+                            <span class="card-title-spacer" aria-hidden="true"></span>
+                        </div>
+                        <div class="list-stack">
+                            {% for learner in recommendation_feed.suggested_learners %}
+                                <div class="list-item">
+                                    <div>
+                                        <strong>{{ learner.name }}</strong>
+                                        <span>Wants {{ learner.wants|join(', ') }}</span>
+                                    </div>
+                                </div>
+                            {% else %}
+                                <div class="dashboard-card-placeholder">
+                                    <p>No learner suggestions yet. Add more teaching skills to grow demand around your profile.</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </article>
+
+                    <article class="surface-card">
+                        <div class="card-title-row">
+                            <h2>Trending In Your Interests</h2>
+                            <span class="card-title-spacer" aria-hidden="true"></span>
+                        </div>
+                        <div class="list-stack">
+                            {% for person in recommendation_feed.trending %}
+                                <div class="list-item">
+                                    <div>
+                                        <strong>{{ person.name }}</strong>
+                                        <span>{{ person.categories|join(', ') }}</span>
+                                    </div>
+                                </div>
+                            {% else %}
+                                <div class="dashboard-card-placeholder">
+                                    <p>No trend data yet. Add skills across a few categories to unlock discovery suggestions.</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </article>
+                </div>
+            </section>
+        </div>
+    </div>
+</section>
+{% endblock %}

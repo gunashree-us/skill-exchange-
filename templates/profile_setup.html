@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="auth-band">
+    <div class="shell auth-shell profile-setup-shell">
+        <article class="surface-card profile-setup-card">
+            <div class="setup-badge">Profile Setup</div>
+            <h1>Finish your profile before you start matching</h1>
+            <p class="setup-copy">Add the links and details that help other members understand your background and trust your teaching profile.</p>
+
+            <div class="setup-highlights">
+                <div class="setup-highlight">
+                    <strong>GitHub</strong>
+                    <span>Share your code, projects, or technical portfolio.</span>
+                </div>
+                <div class="setup-highlight">
+                    <strong>LinkedIn</strong>
+                    <span>Give learners a quick way to see your professional background.</span>
+                </div>
+                <div class="setup-highlight">
+                    <strong>Certifications</strong>
+                    <span>Add any course completion, license, or certificate that supports your profile.</span>
+                </div>
+            </div>
+
+            <form method="post" class="stack-form profile-setup-form" enctype="multipart/form-data">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="setup-photo-row">
+                    <div class="profile-avatar setup-avatar">
+                        {% if current_user.profile_photo_path %}
+                            <img src="{{ url_for('static', filename=current_user.profile_photo_path.replace('static/', '', 1)) }}" alt="{{ current_user.name }} profile photo">
+                        {% else %}
+                            {{ current_user.name[0]|upper if current_user.name else 'U' }}
+                        {% endif %}
+                    </div>
+                    <div class="upload-stack">
+                        <label>Profile Photo</label>
+                        <label class="upload-dropzone">
+                            <span class="upload-dropzone-title">Drop an image here or click to choose</span>
+                            <span class="upload-dropzone-copy">PNG, JPG, JPEG, or WebP</span>
+                            <input type="file" name="profile_photo" accept=".png,.jpg,.jpeg,.webp">
+                        </label>
+                    </div>
+                </div>
+                <label>Short Bio
+                    <textarea name="bio" rows="4" placeholder="Describe what you teach, what you are learning, and how you like to collaborate.">{{ current_user.bio }}</textarea>
+                </label>
+                <label>Location / Availability
+                    <input type="text" name="availability" value="{{ current_user.availability }}" placeholder="Weekends, evenings, remote or your city">
+                </label>
+                <label>GitHub Profile
+                    <input type="url" name="github_url" value="{{ current_user.github_url }}" placeholder="https://github.com/yourname">
+                </label>
+                <label>LinkedIn Profile
+                    <input type="url" name="linkedin_url" value="{{ current_user.linkedin_url }}" placeholder="https://www.linkedin.com/in/yourname">
+                </label>
+                <label>Certifications
+                    <textarea name="certifications" rows="5" placeholder="List any certificates, completed programs, or credentials you want to show on your profile.">{{ current_user.certifications }}</textarea>
+                </label>
+                <div class="upload-stack">
+                    <label>Certificate Files</label>
+                    <label class="upload-dropzone">
+                        <span class="upload-dropzone-title">Drop certificate files here or click to choose</span>
+                        <span class="upload-dropzone-copy">PDF, PNG, JPG, JPEG, or WebP. You can add multiple files.</span>
+                        <input type="file" name="certificate_files" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple>
+                    </label>
+                </div>
+                <button class="button button-dark full-width" type="submit">Save And Continue</button>
+            </form>
+        </article>
+    </div>
+</section>
+{% endblock %}

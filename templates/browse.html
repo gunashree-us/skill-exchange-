@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="soft-band page-band">
+    <div class="shell">
+        <div class="page-heading">
+            <h1>Browse Members</h1>
+            <p>Explore learners and teachers across the community.</p>
+        </div>
+        <article class="surface-card">
+            <form method="get" class="search-form browse-search-form">
+                <label>
+                    <span class="sr-only">Search by skill or member</span>
+                    <input type="text" name="q" value="{{ term }}" placeholder="Search by skill or member">
+                </label>
+                <label>
+                    <span class="sr-only">Filter by category</span>
+                    <select name="category">
+                        <option value="">All categories</option>
+                        {% for category in categories %}
+                            <option value="{{ category.category }}" {% if selected_category == category.category %}selected{% endif %}>{{ category.category }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <button class="button button-light" type="submit">Apply</button>
+            </form>
+        </article>
+        <div class="three-grid">
+            {% for person in people %}
+                <article class="match-card">
+                    <div class="match-head">
+                        <div class="avatar-circle large">{{ person.initials }}</div>
+                        <div>
+                            <h3>{{ person.name }}</h3>
+                            <span>
+                                {% if person.avg_rating %}⭐ {{ person.avg_rating }} · {% endif %}
+                                {{ person.teach_skills|length }} teach · {{ person.learn_skills|length }} learn
+                            </span>
+                        </div>
+                    </div>
+                    <p>{{ person.bio or 'No bio yet.' }}</p>
+                    <p class="match-meta">Availability: {{ person.availability or 'Flexible' }}</p>
+                    {% if person.teach_skills %}
+                        <div class="stack-label">
+                            <strong>Teaches:</strong>
+                            <div class="tag-row">
+                                {% for skill in person.teach_skills[:4] %}
+                                    <span class="tag-chip">{{ skill.name }}</span>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    {% endif %}
+                    {% if person.learn_skills %}
+                        <div class="stack-label">
+                            <strong>Wants to learn:</strong>
+                            <div class="tag-row">
+                                {% for skill in person.learn_skills[:4] %}
+                                    <span class="tag-chip muted-chip">{{ skill.name }}</span>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    {% endif %}
+                    <div class="request-actions">
+                        <a class="button button-light small-button" href="{{ url_for('matches', q=person.name) }}">View on Match</a>
+                    </div>
+                </article>
+            {% else %}
+                <div class="empty-state">No members match that search yet. Try a broader skill name or clear the category filter.</div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endblock %}
