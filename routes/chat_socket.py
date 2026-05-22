@@ -1,6 +1,6 @@
 import secrets
 
-from flask import session
+from flask import request, session
 from flask_socketio import emit, join_room, leave_room
 
 from core import (
@@ -147,6 +147,8 @@ def emit_conference_event(event_name, *, room_id, target_user_id=None, payload=N
 @socketio.on("video_call_invite")
 def video_call_invite(data):
     # Notify the accepted partner that a live video call is being started.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     partner_id = int((data or {}).get("partner_id", 0))
     emit_call_event("video_call_invite", user_id, partner_id)
@@ -155,6 +157,8 @@ def video_call_invite(data):
 @socketio.on("video_call_accept")
 def video_call_accept(data):
     # Tell the caller that the partner is ready to begin negotiation.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     partner_id = int((data or {}).get("partner_id", 0))
     emit_call_event("video_call_accept", user_id, partner_id)
@@ -163,6 +167,8 @@ def video_call_accept(data):
 @socketio.on("video_call_decline")
 def video_call_decline(data):
     # Allow the partner to decline an incoming call request.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     partner_id = int((data or {}).get("partner_id", 0))
     emit_call_event("video_call_decline", user_id, partner_id)
@@ -171,6 +177,8 @@ def video_call_decline(data):
 @socketio.on("video_call_offer")
 def video_call_offer(data):
     # Relay WebRTC SDP offers through the existing authenticated Socket.IO room.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     partner_id = int((data or {}).get("partner_id", 0))
     emit_call_event("video_call_offer", user_id, partner_id, extract_signal_payload(data, "offer"))
@@ -179,6 +187,8 @@ def video_call_offer(data):
 @socketio.on("video_call_answer")
 def video_call_answer(data):
     # Relay WebRTC SDP answers back to the caller.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     partner_id = int((data or {}).get("partner_id", 0))
     emit_call_event("video_call_answer", user_id, partner_id, extract_signal_payload(data, "answer"))
@@ -187,6 +197,8 @@ def video_call_answer(data):
 @socketio.on("video_call_ice_candidate")
 def video_call_ice_candidate(data):
     # Forward ICE candidates so peers can discover a direct connection path.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     partner_id = int((data or {}).get("partner_id", 0))
     emit_call_event("video_call_ice_candidate", user_id, partner_id, extract_signal_payload(data, "candidate"))
@@ -195,6 +207,8 @@ def video_call_ice_candidate(data):
 @socketio.on("video_call_end")
 def video_call_end(data):
     # End the current video call for both participants.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     partner_id = int((data or {}).get("partner_id", 0))
     emit_call_event("video_call_end", user_id, partner_id)
@@ -203,6 +217,8 @@ def video_call_end(data):
 @socketio.on("conference_start")
 def conference_start(data):
     # Start a new group conference room and notify the selected accepted partners.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     participant_ids = []
     seen_participant_ids = set()
@@ -271,6 +287,8 @@ def conference_start(data):
 @socketio.on("conference_join")
 def conference_join(data):
     # Join an invited conference room and share the current roster with the client.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     room_id = (data or {}).get("room_id")
     room = ACTIVE_CONFERENCE_ROOMS.get(room_id)
@@ -302,6 +320,8 @@ def conference_join(data):
 @socketio.on("conference_decline")
 def conference_decline(data):
     # Let the host know an invited participant declined the conference invite.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     room_id = (data or {}).get("room_id")
     room = ACTIVE_CONFERENCE_ROOMS.get(room_id)
@@ -318,6 +338,8 @@ def conference_decline(data):
 @socketio.on("conference_offer")
 def conference_offer(data):
     # Relay one peer's SDP offer to another participant in the same conference room.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     room_id = (data or {}).get("room_id")
     target_user_id = int((data or {}).get("target_user_id", 0))
@@ -335,6 +357,8 @@ def conference_offer(data):
 @socketio.on("conference_answer")
 def conference_answer(data):
     # Relay one peer's SDP answer back to the offer sender.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     room_id = (data or {}).get("room_id")
     target_user_id = int((data or {}).get("target_user_id", 0))
@@ -352,6 +376,8 @@ def conference_answer(data):
 @socketio.on("conference_ice_candidate")
 def conference_ice_candidate(data):
     # Forward ICE candidates between conference participants.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     room_id = (data or {}).get("room_id")
     target_user_id = int((data or {}).get("target_user_id", 0))
@@ -369,6 +395,8 @@ def conference_ice_candidate(data):
 @socketio.on("conference_leave")
 def conference_leave(data):
     # Leave the conference room and notify the rest of the participants.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     room_id = (data or {}).get("room_id")
     room = ACTIVE_CONFERENCE_ROOMS.get(room_id)
@@ -426,7 +454,7 @@ def socket_send_message(data):
 
 
 @socketio.on("disconnect")
-def disconnect_socket():
+def disconnect_socket(_reason=None):
     # Clean up room membership when a browser tab closes or refreshes.
     payload = SID_ROOMS.pop(request.sid, None)
     if not payload:

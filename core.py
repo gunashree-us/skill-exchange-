@@ -95,6 +95,13 @@ ADMIN_USERS_PER_PAGE = 25
 LEVEL_ORDER = {"Beginner": 1, "Intermediate": 2, "Advanced": 3}
 UPLOAD_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 UPLOAD_CERTIFICATE_EXTENSIONS = {"pdf", "png", "jpg", "jpeg", "webp"}
+UPLOAD_CHAT_MEDIA_EXTENSIONS = {
+    "png", "jpg", "jpeg", "webp", "gif",
+    "mp4", "mov", "m4v", "webm",
+    "mp3", "wav", "ogg", "m4a", "aac",
+    "pdf", "zip",
+    "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+}
 ACTIVE_CHAT_ROOMS = defaultdict(set)
 SID_ROOMS = {}
 ACTIVE_CONFERENCE_ROOMS = {}
@@ -103,6 +110,7 @@ DISPLAY_TIMEZONE = ZoneInfo(os.environ.get("APP_TIMEZONE", "Asia/Kolkata"))
 UPLOADS_DIR = os.path.join(BASE_DIR, "static", "uploads")
 PROFILE_UPLOADS_DIR = os.path.join(UPLOADS_DIR, "profiles")
 CERTIFICATE_UPLOADS_DIR = os.path.join(UPLOADS_DIR, "certificates")
+CHAT_MEDIA_UPLOADS_DIR = os.path.join(UPLOADS_DIR, "chat_media")
 SCHEMA_BOOTSTRAP_LOCK = Lock()
 SCHEMA_BOOTSTRAPPED = False
 
@@ -243,6 +251,14 @@ def ensure_schema_updates(db):
         db.execute("ALTER TABLE users ADD COLUMN profile_setup_completed INTEGER NOT NULL DEFAULT 1")
     if not column_exists(db, "messages", "delivered_at"):
         db.execute("ALTER TABLE messages ADD COLUMN delivered_at TIMESTAMP")
+    if not column_exists(db, "messages", "attachment_name"):
+        db.execute("ALTER TABLE messages ADD COLUMN attachment_name TEXT DEFAULT ''")
+    if not column_exists(db, "messages", "attachment_path"):
+        db.execute("ALTER TABLE messages ADD COLUMN attachment_path TEXT DEFAULT ''")
+    if not column_exists(db, "messages", "attachment_kind"):
+        db.execute("ALTER TABLE messages ADD COLUMN attachment_kind TEXT DEFAULT ''")
+    if not column_exists(db, "messages", "attachment_mime"):
+        db.execute("ALTER TABLE messages ADD COLUMN attachment_mime TEXT DEFAULT ''")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS user_devices (
@@ -389,7 +405,8 @@ def csrf_protect():
     if request.method == "POST":
         token = request.form.get("csrf_token") or request.headers.get("X-CSRFToken")
         if not token or token != session.get("_csrf_token"):
-            if request.is_json:
+            expects_json = request.is_json or request.headers.get("X-Requested-With") == "fetch"
+            if expects_json:
                 return jsonify({"error": "Your session expired. Please try again."}), 400
             flash("Your session expired. Please try again.", "danger")
             return redirect(request.referrer or url_for("index"))

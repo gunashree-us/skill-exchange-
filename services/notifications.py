@@ -134,6 +134,14 @@ def accepted_chat_partners(user_id):
                 LIMIT 1
             ) AS last_message,
             (
+                SELECT attachment_kind
+                FROM messages latest
+                WHERE (latest.sender_id = ? AND latest.receiver_id = partner.id)
+                   OR (latest.sender_id = partner.id AND latest.receiver_id = ?)
+                ORDER BY latest.created_at DESC, latest.id DESC
+                LIMIT 1
+            ) AS last_attachment_kind,
+            (
                 SELECT COUNT(*)
                 FROM messages unread
                 WHERE unread.sender_id = partner.id
@@ -154,7 +162,7 @@ def accepted_chat_partners(user_id):
         GROUP BY partner.id, partner.name
         ORDER BY latest_activity DESC
         """,
-        (user_id, user_id, user_id, user_id, user_id, user_id, user_id, user_id),
+        (user_id, user_id, user_id, user_id, user_id, user_id, user_id, user_id, user_id, user_id),
     )
     threads = []
     for index, partner in enumerate(partners):
@@ -163,7 +171,7 @@ def accepted_chat_partners(user_id):
                 "id": partner["partner_id"],
                 "name": partner["partner_name"],
                 "initials": user_initials(partner["partner_name"]),
-                "preview": message_preview(partner["last_message"]),
+                "preview": message_preview(partner["last_message"], partner["last_attachment_kind"]),
                 "time": format_timestamp(partner["latest_activity"]),
                 "unread": partner["unread_count"],
                 "active": index == 0,
@@ -236,7 +244,7 @@ def mark_conversation_read(reader_id, partner_id, *, up_to_id=None):
 def load_messages(user_id, partner_id, *, limit=20, before_id=None):
     # Return conversation chunks in chronological order for lazy loading.
     sql = """
-        SELECT id, sender_id, receiver_id, body, created_at, delivered_at, read_at
+        SELECT id, sender_id, receiver_id, body, attachment_name, attachment_path, attachment_kind, attachment_mime, created_at, delivered_at, read_at
         FROM messages
         WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
     """
@@ -255,15 +263,20 @@ def serialize_message(message, current_user_id):
     # Normalize message payloads for templates and Socket.IO clients.
     is_self = message["sender_id"] == current_user_id
     status = "Read" if message.get("read_at") else ("Delivered" if message.get("delivered_at") else "Sent")
+    attachment_path = message.get("attachment_path") or ""
     return {
         "id": message["id"],
         "body": "Encrypted message. Unlock with your shared key." if is_encrypted_message_body(message["body"]) else message["body"],
         "raw_body": message["body"],
         "encrypted": is_encrypted_message_body(message["body"]),
+        "attachment_name": message.get("attachment_name") or "",
+        "attachment_kind": message.get("attachment_kind") or "",
+        "attachment_mime": message.get("attachment_mime") or "",
+        "attachment_url": f"/{attachment_path}" if attachment_path else "",
+        "has_attachment": bool(attachment_path),
         "created_at": format_timestamp(message["created_at"], include_date=True),
         "delivered_at": message.get("delivered_at"),
         "read_at": message.get("read_at"),
         "side": "right" if is_self else "left",
         "status": status if is_self else "",
     }
-

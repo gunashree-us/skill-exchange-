@@ -2584,9 +2584,82 @@ textarea:focus {
 }
 
 .chat-input-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
     gap: 10px;
     padding: 14px 16px;
     border-top: 1px solid var(--line);
+}
+
+.chat-composer {
+    display: grid;
+    gap: 8px;
+}
+
+.chat-composer-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.attachment-picker {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 34px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.attachment-picker:hover {
+    border-color: var(--navy);
+}
+
+#mediaInput {
+    display: none;
+}
+
+.attachment-name {
+    font-size: 0.9rem;
+    color: var(--muted);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.message-attachment {
+    display: grid;
+    gap: 8px;
+}
+
+.message-attachment img,
+.message-attachment video {
+    width: min(100%, 320px);
+    border-radius: 18px;
+    display: block;
+    background: #00000010;
+}
+
+.message-attachment audio {
+    width: min(100%, 320px);
+}
+
+.attachment-link {
+    color: inherit;
+    font-weight: 700;
+    word-break: break-word;
+}
+
+.attachment-file {
+    text-decoration: none;
 }
 
 .send-button {

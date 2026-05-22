@@ -31,6 +31,9 @@ def send_request(receiver_id):
             raise ValueError("Select both the skill you offer and the skill you want.")
         if receiver_id == g.user["id"]:
             raise ValueError("You cannot send a request to yourself.")
+        receiver = query_db("SELECT 1 FROM users WHERE id = ?", (receiver_id,), one=True)
+        if receiver is None:
+            raise ValueError("That member is no longer available.")
         if duration_minutes not in REQUEST_DURATIONS:
             raise ValueError("Choose a valid session duration.")
         owned_teach = query_db(
@@ -95,15 +98,18 @@ def send_request(receiver_id):
         )
         if existing_request is not None:
             raise ValueError(f"This exchange request is already {existing_request['status'].lower()}.")
-        execute_db(
-            """
-            INSERT INTO exchange_requests (
-                sender_id, receiver_id, teach_skill_id, learn_skill_id, message, schedule_note, proposed_time, duration_minutes
+        try:
+            execute_db(
+                """
+                INSERT INTO exchange_requests (
+                    sender_id, receiver_id, teach_skill_id, learn_skill_id, message, schedule_note, proposed_time, duration_minutes
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (g.user["id"], receiver_id, teach_skill_id, learn_skill_id, message, schedule_note, proposed_time, duration_minutes),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (g.user["id"], receiver_id, teach_skill_id, learn_skill_id, message, schedule_note, proposed_time, duration_minutes),
-        )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("The selected skills are no longer valid for this exchange.") from exc
         flash("Exchange request sent.", "success")
     except (TypeError, ValueError) as exc:
         flash(str(exc) if str(exc) else "Unable to send exchange request.", "danger")
@@ -182,7 +188,6 @@ def requests_view():
     )
 
 
-@app.route("/chat")
 @app.route("/requests/<int:request_id>/status", methods=["POST"])
 @login_required
 def update_request_status(request_id):
@@ -263,5 +268,4 @@ def add_review(request_id):
     except ValueError as exc:
         flash(str(exc), "danger")
     return redirect(url_for("requests_view"))
-
 

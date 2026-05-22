@@ -1,4 +1,4 @@
-from flask import flash, redirect, render_template, request, session, url_for
+from flask import flash, g, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from core import MAX_EMAIL_LENGTH, MAX_NAME_LENGTH, MAX_PASSWORD_LENGTH, app, execute_db, query_db, validate_text
@@ -7,6 +7,13 @@ from core import MAX_EMAIL_LENGTH, MAX_NAME_LENGTH, MAX_PASSWORD_LENGTH, app, ex
 @app.route("/register", methods=["GET", "POST"])
 def register():
     # Create a new account after validating the submitted form fields.
+    if g.get("user") is not None:
+        flash("You are already signed in.", "info")
+        if g.user["is_admin"]:
+            return redirect(url_for("admin"))
+        if not g.user["profile_setup_completed"]:
+            return redirect(url_for("profile_setup"))
+        return redirect(url_for("dashboard"))
     if request.method == "POST":
         try:
             name = validate_text(request.form.get("name"), "Name", MAX_NAME_LENGTH, min_length=2, required=True)
@@ -32,6 +39,13 @@ def register():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     # Authenticate the user and persist their id in the Flask session.
+    if g.get("user") is not None:
+        flash("You are already signed in.", "info")
+        if g.user["is_admin"]:
+            return redirect(url_for("admin"))
+        if not g.user["profile_setup_completed"]:
+            return redirect(url_for("profile_setup"))
+        return redirect(url_for("dashboard"))
     if request.method == "POST":
         email = validate_text(request.form.get("email"), "Email", MAX_EMAIL_LENGTH, required=True).lower()
         password = validate_text(request.form.get("password"), "Password", MAX_PASSWORD_LENGTH, required=True)

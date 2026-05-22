@@ -10,6 +10,7 @@ from core import (
     SID_CONFERENCE_ROOMS,
     SID_ROOMS,
     app,
+    delete_file_if_exists,
     get_webrtc_ice_servers,
     get_db,
     login_required,
@@ -33,6 +34,7 @@ from services.notifications import (
     unread_thread_count,
     user_room_name,
 )
+from uploads import save_chat_media, validate_chat_media_upload
 
 
 @app.route("/chat")
@@ -91,29 +93,71 @@ def chat_messages(partner_id):
 @app.route("/chat/send/<int:partner_id>", methods=["POST"])
 @login_required
 def send_chat_message(partner_id):
-    # HTTP fallback for environments where Socket.IO is unavailable.
+    # Accept text and optional attachment uploads, then fan the saved message out live.
     if not can_chat_with(g.user["id"], partner_id):
         if request.is_json:
             return jsonify({"error": "Chat partner not found."}), 404
         flash("You can only chat with accepted exchange partners.", "danger")
         return redirect(url_for("chat"))
 
-    raw_body = request.json.get("body") if request.is_json else request.form.get("body")
+    payload = request.get_json(silent=True) if request.is_json else request.form
+    raw_body = payload.get("body") if payload else ""
+    media_file = None if request.is_json else request.files.get("media")
     try:
-        body = validate_message_body(raw_body)
+        body = validate_message_body(raw_body, allow_empty=True)
+        validate_chat_media_upload(media_file)
     except ValueError as exc:
         if request.is_json:
             return jsonify({"error": str(exc)}), 400
         flash(str(exc), "danger")
         return redirect(url_for("chat", partner_id=partner_id))
+    attachment = save_chat_media(media_file) if media_file and media_file.filename else None
+    if not body and not attachment:
+        error_message = "Add a message or choose a file to send."
+        if request.is_json:
+            return jsonify({"error": error_message}), 400
+        flash(error_message, "danger")
+        return redirect(url_for("chat", partner_id=partner_id))
 
-    cursor = execute_db(
-        "INSERT INTO messages (sender_id, receiver_id, body, delivered_at) VALUES (?, ?, ?, ?)",
-        (g.user["id"], partner_id, body, None),
+    room = room_name_for_users(g.user["id"], partner_id)
+    partner_online = partner_id in ACTIVE_CHAT_ROOMS.get(room, set())
+    delivered_at = "CURRENT_TIMESTAMP" if partner_online else "NULL"
+
+    try:
+        cursor = execute_db(
+            f"""
+            INSERT INTO messages (
+                sender_id, receiver_id, body, attachment_name, attachment_path, attachment_kind, attachment_mime, delivered_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, {delivered_at})
+            """,
+            (
+                g.user["id"],
+                partner_id,
+                body,
+                (attachment or {}).get("name", ""),
+                (attachment or {}).get("path", ""),
+                (attachment or {}).get("kind", ""),
+                (attachment or {}).get("mime", ""),
+            ),
+        )
+    except Exception:
+        if attachment:
+            delete_file_if_exists(attachment["path"])
+        raise
+    message = dict(query_db("SELECT * FROM messages WHERE id = ?", (cursor.lastrowid,), one=True))
+    socket_id = str((payload or {}).get("socket_id") or "").strip()
+    socketio.emit(
+        "chat_message",
+        serialize_message(message, partner_id),
+        to=room,
+        skip_sid=socket_id or None,
     )
-    if request.is_json:
-        message = query_db("SELECT * FROM messages WHERE id = ?", (cursor.lastrowid,), one=True)
-        return jsonify(serialize_message(dict(message), g.user["id"]))
+    if partner_online:
+        socketio.emit("message_status", {"ids": [message["id"]], "status": "Delivered"}, room=user_room_name(g.user["id"]))
+    emit_chat_notification(g.user["id"], partner_id=partner_id)
+    emit_chat_notification(partner_id, partner_id=g.user["id"])
+    if request.is_json or request.headers.get("X-Requested-With") == "fetch":
+        return jsonify(serialize_message(message, g.user["id"]))
     return redirect(url_for("chat", partner_id=partner_id))
 
 
@@ -268,4 +312,3 @@ def rewrap_message_keys():
     )
     db.commit()
     return jsonify({"ok": True, "updated": len(valid_ids)})
-

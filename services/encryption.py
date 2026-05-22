@@ -16,19 +16,33 @@ def is_encrypted_message_body(body):
     return isinstance(body, str) and (body.startswith("enc::") or body.startswith("encauto::"))
 
 
-def message_preview(body):
+def message_preview(body, attachment_kind=""):
     # Never leak ciphertext into the thread list preview.
     if is_encrypted_message_body(body):
         return "Encrypted message. Unlock to read."
+    if body:
+        return body
+    if attachment_kind == "image":
+        return "Photo attachment"
+    if attachment_kind == "video":
+        return "Video attachment"
+    if attachment_kind == "audio":
+        return "Audio attachment"
+    if attachment_kind:
+        return "File attachment"
     return body or "Start the conversation"
 
 
-def validate_message_body(raw_body):
+def validate_message_body(raw_body, *, allow_empty=False):
     # Allow either plaintext chat text or browser-encrypted ciphertext envelopes.
     if raw_body is None:
+        if allow_empty:
+            return ""
         raise ValueError("Message is required.")
     body = str(raw_body).strip()
     if not body:
+        if allow_empty:
+            return ""
         raise ValueError("Message is required.")
     max_length = MAX_ENCRYPTED_MESSAGE_LENGTH if is_encrypted_message_body(body) else MAX_MESSAGE_LENGTH
     if len(body) > max_length:

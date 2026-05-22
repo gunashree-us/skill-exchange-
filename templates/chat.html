@@ -65,7 +65,30 @@
                             <button class="button button-light small-button load-older-button" id="loadOlderButton" type="button">Load older messages</button>
                             {% for message in messages %}
                                 <div class="chat-bubble {{ message.side }}" data-message-id="{{ message.id }}">
-                                    <p class="message-body" data-raw-body="{{ message.raw_body|e }}" data-encrypted="{{ 1 if message.encrypted else 0 }}">{{ message.body }}</p>
+                                    {% if message.has_attachment %}
+                                        <div class="message-attachment attachment-{{ message.attachment_kind }}">
+                                            {% if message.attachment_kind == "image" %}
+                                                <a href="{{ message.attachment_url }}" target="_blank" rel="noopener noreferrer">
+                                                    <img src="{{ message.attachment_url }}" alt="{{ message.attachment_name }}">
+                                                </a>
+                                            {% elif message.attachment_kind == "video" %}
+                                                <video controls preload="metadata">
+                                                    <source src="{{ message.attachment_url }}" type="{{ message.attachment_mime or 'video/mp4' }}">
+                                                </video>
+                                                <a class="attachment-link" href="{{ message.attachment_url }}" target="_blank" rel="noopener noreferrer">{{ message.attachment_name }}</a>
+                                            {% elif message.attachment_kind == "audio" %}
+                                                <audio controls preload="metadata">
+                                                    <source src="{{ message.attachment_url }}" type="{{ message.attachment_mime or 'audio/mpeg' }}">
+                                                </audio>
+                                                <a class="attachment-link" href="{{ message.attachment_url }}" target="_blank" rel="noopener noreferrer">{{ message.attachment_name }}</a>
+                                            {% else %}
+                                                <a class="attachment-link attachment-file" href="{{ message.attachment_url }}" target="_blank" rel="noopener noreferrer">{{ message.attachment_name }}</a>
+                                            {% endif %}
+                                        </div>
+                                    {% endif %}
+                                    {% if message.raw_body %}
+                                        <p class="message-body" data-raw-body="{{ message.raw_body|e }}" data-encrypted="{{ 1 if message.encrypted else 0 }}">{{ message.body }}</p>
+                                    {% endif %}
                                     <div class="chat-meta">
                                         <span>{{ message.created_at }}</span>
                                         {% if message.status %}
@@ -78,9 +101,16 @@
                             {% endfor %}
                         </div>
 
-                        <form class="chat-input-row" id="chatForm" method="post" action="{{ url_for('send_chat_message', partner_id=active_thread.id) }}">
+                        <form class="chat-input-row" id="chatForm" method="post" action="{{ url_for('send_chat_message', partner_id=active_thread.id) }}" enctype="multipart/form-data">
                             <input type="hidden" name="csrf_token" id="csrfToken" value="{{ csrf_token() }}">
-                            <input type="text" name="body" id="messageInput" placeholder="Type your message..." maxlength="500" autocomplete="off" required>
+                            <div class="chat-composer">
+                                <input type="text" name="body" id="messageInput" placeholder="Type a message or add a file..." maxlength="500" autocomplete="off">
+                                <div class="chat-composer-actions">
+                                    <label class="attachment-picker" for="mediaInput">Attach</label>
+                                    <input type="file" name="media" id="mediaInput" accept=".png,.jpg,.jpeg,.webp,.gif,.mp4,.mov,.m4v,.webm,.mp3,.wav,.ogg,.m4a,.aac,.pdf,.zip,.doc,.docx,.xls,.xlsx,.ppt,.pptx">
+                                    <span class="attachment-name" id="attachmentName">No file chosen</span>
+                                </div>
+                            </div>
                             <button class="send-button" type="submit">➤</button>
                         </form>
                     {% else %}
@@ -161,6 +191,8 @@
 const chatMessages = document.getElementById("chatMessages");
 const chatForm = document.getElementById("chatForm");
 const messageInput = document.getElementById("messageInput");
+const mediaInput = document.getElementById("mediaInput");
+const attachmentName = document.getElementById("attachmentName");
 const sendMessageButton = chatForm.querySelector('button[type="submit"]');
 const csrfToken = document.getElementById("csrfToken").value;
 const partnerId = chatMessages.dataset.partnerId;
@@ -237,6 +269,49 @@ function escapeHtml(value) {
     const div = document.createElement("div");
     div.innerText = value;
     return div.innerHTML;
+}
+
+function renderAttachment(message) {
+    if (!message.has_attachment || !message.attachment_url) {
+        return "";
+    }
+    const url = escapeAttribute(message.attachment_url);
+    const name = escapeHtml(message.attachment_name || "Attachment");
+    const mime = escapeAttribute(message.attachment_mime || "");
+    if (message.attachment_kind === "image") {
+        return `
+            <div class="message-attachment attachment-image">
+                <a href="${url}" target="_blank" rel="noopener noreferrer">
+                    <img src="${url}" alt="${name}">
+                </a>
+            </div>
+        `;
+    }
+    if (message.attachment_kind === "video") {
+        return `
+            <div class="message-attachment attachment-video">
+                <video controls preload="metadata">
+                    <source src="${url}" type="${mime || "video/mp4"}">
+                </video>
+                <a class="attachment-link" href="${url}" target="_blank" rel="noopener noreferrer">${name}</a>
+            </div>
+        `;
+    }
+    if (message.attachment_kind === "audio") {
+        return `
+            <div class="message-attachment attachment-audio">
+                <audio controls preload="metadata">
+                    <source src="${url}" type="${mime || "audio/mpeg"}">
+                </audio>
+                <a class="attachment-link" href="${url}" target="_blank" rel="noopener noreferrer">${name}</a>
+            </div>
+        `;
+    }
+    return `
+        <div class="message-attachment attachment-file">
+            <a class="attachment-link attachment-file" href="${url}" target="_blank" rel="noopener noreferrer">${name}</a>
+        </div>
+    `;
 }
 
 function escapeAttribute(value) {
@@ -1067,7 +1142,8 @@ function endCurrentCall({notifyPeer = true, statusText = "Call ended"} = {}) {
 function renderMessage(message) {
     return `
         <div class="chat-bubble ${message.side}" data-message-id="${message.id}">
-            <p class="message-body" data-raw-body="${escapeAttribute(message.raw_body || message.body || "")}" data-encrypted="${message.encrypted ? "1" : "0"}">${escapeHtml(message.body)}</p>
+            ${renderAttachment(message)}
+            ${message.raw_body ? `<p class="message-body" data-raw-body="${escapeAttribute(message.raw_body || message.body || "")}" data-encrypted="${message.encrypted ? "1" : "0"}">${escapeHtml(message.body)}</p>` : ""}
             <div class="chat-meta">
                 <span>${escapeHtml(message.created_at)}</span>
                 ${message.status ? `<em class="message-status">${escapeHtml(message.status)}</em>` : ""}
@@ -1111,29 +1187,51 @@ function setSendingState(isSending) {
 async function submitEncryptedMessage() {
     if (isSendingMessage) return;
     const body = messageInput.value.trim();
-    if (!body) return;
-    const myDevices = devicesForUser(Number(currentUserId));
-    const partnerDevices = devicesForUser(Number(partnerId));
-    if (!myDevices.length || !partnerDevices.length) {
-        secureStatus.innerText = "This chat is waiting for secure account setup before sending encrypted messages.";
-        return;
-    }
+    const mediaFile = mediaInput.files[0];
+    if (!body && !mediaFile) return;
     setSendingState(true);
     try {
-        const outboundBody = await encryptEnvelopeForDevices(body, [
-            ...myDevices.map((device) => ({deviceId: device.id, publicKey: device.public_key})),
-            ...partnerDevices.map((device) => ({deviceId: device.id, publicKey: device.public_key})),
-        ]);
-        socket.emit("send_message", socketPayload({partner_id: Number(partnerId), body: outboundBody}));
-        messageInput.value = "";
-        socket.emit("typing", socketPayload({partner_id: Number(partnerId), is_typing: false}));
-        window.setTimeout(() => {
-            if (isSendingMessage) {
+        let outboundBody = "";
+        if (body) {
+            const myDevices = devicesForUser(Number(currentUserId));
+            const partnerDevices = devicesForUser(Number(partnerId));
+            if (!myDevices.length || !partnerDevices.length) {
+                secureStatus.innerText = "This chat is waiting for secure account setup before sending encrypted messages.";
                 setSendingState(false);
+                return;
             }
-        }, 2500);
+            outboundBody = await encryptEnvelopeForDevices(body, [
+                ...myDevices.map((device) => ({deviceId: device.id, publicKey: device.public_key})),
+                ...partnerDevices.map((device) => ({deviceId: device.id, publicKey: device.public_key})),
+            ]);
+        }
+        const formData = new FormData();
+        formData.append("csrf_token", csrfToken);
+        formData.append("body", outboundBody);
+        if (socket.id) {
+            formData.append("socket_id", socket.id);
+        }
+        if (mediaFile) {
+            formData.append("media", mediaFile);
+        }
+        const response = await fetch(chatForm.action, {
+            method: "POST",
+            body: formData,
+            headers: {"X-Requested-With": "fetch"},
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload.error || "Unable to send message.");
+        }
+        renderMessages([payload]);
+        messageInput.value = "";
+        mediaInput.value = "";
+        attachmentName.innerText = "No file chosen";
+        socket.emit("typing", socketPayload({partner_id: Number(partnerId), is_typing: false}));
+        setSendingState(false);
     } catch (error) {
         console.error(error);
+        alert(error.message || "Unable to send message.");
         setSendingState(false);
     }
 }
@@ -1159,11 +1257,16 @@ chatForm.addEventListener("submit", async (event) => {
 });
 
 messageInput.addEventListener("input", () => {
-        socket.emit("typing", socketPayload({partner_id: Number(partnerId), is_typing: true}));
+    socket.emit("typing", socketPayload({partner_id: Number(partnerId), is_typing: true}));
     clearTimeout(typingTimeout);
     typingTimeout = setTimeout(() => {
         socket.emit("typing", socketPayload({partner_id: Number(partnerId), is_typing: false}));
     }, 900);
+});
+
+mediaInput.addEventListener("change", () => {
+    const file = mediaInput.files[0];
+    attachmentName.innerText = file ? file.name : "No file chosen";
 });
 
 loadOlderButton.addEventListener("click", loadOlderMessages);
