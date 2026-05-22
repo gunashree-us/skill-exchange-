@@ -1,9 +1,8 @@
-import sqlite3
-
 from flask import flash, g, redirect, render_template, request, url_for
 
 from core import (
     DEFAULT_CATEGORIES,
+    IntegrityError,
     MAX_CATEGORY_LENGTH,
     MAX_SKILL_NAME_LENGTH,
     app,
@@ -94,7 +93,7 @@ def add_skill():
                 (g.user["id"], skill["id"], skill_type, level),
             )
             flash("Skill added.", "success")
-        except sqlite3.IntegrityError:
+        except IntegrityError:
             flash("That skill is already listed in your profile.", "warning")
     except ValueError as exc:
         flash(str(exc), "danger")

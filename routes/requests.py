@@ -1,8 +1,7 @@
-import sqlite3
-
 from flask import flash, g, redirect, render_template, request, url_for
 
 from core import (
+    IntegrityError,
     MAX_MESSAGE_LENGTH,
     MAX_REVIEW_LENGTH,
     MAX_SCHEDULE_LENGTH,
@@ -108,7 +107,7 @@ def send_request(receiver_id):
                 """,
                 (g.user["id"], receiver_id, teach_skill_id, learn_skill_id, message, schedule_note, proposed_time, duration_minutes),
             )
-        except sqlite3.IntegrityError as exc:
+        except IntegrityError as exc:
             raise ValueError("The selected skills are no longer valid for this exchange.") from exc
         flash("Exchange request sent.", "success")
     except (TypeError, ValueError) as exc:
@@ -263,9 +262,8 @@ def add_review(request_id):
                 (g.user["id"], reviewee_id, request_id, rating, feedback),
             )
             flash("Review submitted.", "success")
-        except sqlite3.IntegrityError:
+        except IntegrityError:
             flash("You already reviewed this exchange.", "warning")
     except ValueError as exc:
         flash(str(exc), "danger")
     return redirect(url_for("requests_view"))
-

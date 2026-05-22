@@ -5,6 +5,7 @@ from core import (
     delete_file_if_exists,
     execute_db,
     format_timestamp,
+    is_postgres_backend,
     login_required,
     query_db,
     update_profile_fields,
@@ -101,9 +102,14 @@ def profile():
         """,
         (g.user["id"],),
     )
+    review_date_sql = (
+        "TO_CHAR(r.created_at, 'MM') AS month_num, TO_CHAR(r.created_at, 'YYYY') AS year"
+        if is_postgres_backend()
+        else "strftime('%m', r.created_at) AS month_num, strftime('%Y', r.created_at) AS year"
+    )
     reviews = query_db(
-        """
-        SELECT u.name, r.rating, r.feedback, strftime('%m', r.created_at) AS month_num, strftime('%Y', r.created_at) AS year
+        f"""
+        SELECT u.name, r.rating, r.feedback, {review_date_sql}
         FROM reviews r
         JOIN users u ON u.id = r.reviewer_id
         WHERE r.reviewee_id = ?

@@ -3,6 +3,7 @@ import os
 import secrets
 import sqlite3
 import hashlib
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from functools import wraps
@@ -14,9 +15,15 @@ from flask import Flask, flash, g, jsonify, redirect, render_template, request, 
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from werkzeug.security import check_password_hash, generate_password_hash
 
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:  # pragma: no cover - local SQLite installs may not have PostgreSQL support yet.
+    psycopg = None
+    dict_row = None
+
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-DATABASE = os.path.join(BASE_DIR, "skill_exchange.db")
 STYLES_PATH = os.path.join(BASE_DIR, "static", "styles.css")
 
 
@@ -40,6 +47,41 @@ load_local_env()
 DEBUG_MODE = os.environ.get("FLASK_DEBUG", "").lower() in {"1", "true", "yes"}
 SECRET_KEY = os.environ.get("SECRET_KEY")
 
+
+def resolve_sqlite_path():
+    # Allow deployments to keep SQLite on a persistent volume outside the app release folder.
+    configured_path = (
+        os.environ.get("DATABASE_PATH")
+        or os.environ.get("SQLITE_PATH")
+        or os.path.join(BASE_DIR, "skill_exchange.db")
+    ).strip()
+    if not os.path.isabs(configured_path):
+        configured_path = os.path.join(BASE_DIR, configured_path)
+    parent_dir = os.path.dirname(configured_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+    return configured_path
+
+
+def resolve_database_config():
+    # Prefer a managed database URL in production, but keep SQLite as the local fallback.
+    database_url = (os.environ.get("DATABASE_URL") or "").strip()
+    if database_url:
+        parsed = urlparse(database_url)
+        if parsed.scheme in {"postgres", "postgresql"}:
+            if psycopg is None:
+                raise RuntimeError("PostgreSQL support requires the 'psycopg' package to be installed.")
+            normalized_url = re.sub(r"^postgres://", "postgresql://", database_url, count=1)
+            return {"backend": "postgresql", "dsn": normalized_url}
+    return {"backend": "sqlite", "path": resolve_sqlite_path()}
+
+
+DATABASE_CONFIG = resolve_database_config()
+if DATABASE_CONFIG["backend"] == "postgresql" and psycopg is not None:
+    IntegrityError = psycopg.IntegrityError
+else:
+    IntegrityError = sqlite3.IntegrityError
+
 if not SECRET_KEY:
     raise RuntimeError(
         "SECRET_KEY environment variable is required.\n"
@@ -51,7 +93,9 @@ if not SECRET_KEY:
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = SECRET_KEY
-app.config["DATABASE"] = DATABASE
+app.config["DB_BACKEND"] = DATABASE_CONFIG["backend"]
+app.config["DATABASE"] = DATABASE_CONFIG.get("path") or DATABASE_CONFIG.get("dsn")
+app.config["DATABASE_DSN"] = DATABASE_CONFIG.get("dsn")
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -113,6 +157,7 @@ CERTIFICATE_UPLOADS_DIR = os.path.join(UPLOADS_DIR, "certificates")
 CHAT_MEDIA_UPLOADS_DIR = os.path.join(UPLOADS_DIR, "chat_media")
 SCHEMA_BOOTSTRAP_LOCK = Lock()
 SCHEMA_BOOTSTRAPPED = False
+POSTGRES_BOOTSTRAP_LOCK_ID = 314159
 
 
 def static_file_version(path):
@@ -137,11 +182,58 @@ def get_webrtc_ice_servers():
     return [{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}]
 
 
+def is_postgres_backend():
+    return app.config["DB_BACKEND"] == "postgresql"
+
+
+def _normalize_query(query):
+    if not is_postgres_backend():
+        return query, False
+    normalized = query.replace("?", "%s")
+    had_insert_ignore = "INSERT OR IGNORE INTO" in normalized.upper()
+    if had_insert_ignore:
+        normalized = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", normalized, flags=re.IGNORECASE)
+        if "ON CONFLICT" not in normalized.upper():
+            normalized = f"{normalized.rstrip()} ON CONFLICT DO NOTHING"
+    return normalized, had_insert_ignore
+
+
+def _fetch_lastrowid(row):
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row.get("id")
+    return row[0]
+
+
+class CursorResult:
+    def __init__(self, cursor, lastrowid=None):
+        self._cursor = cursor
+        self.lastrowid = lastrowid
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+
+def execute_schema_script(db, script):
+    if is_postgres_backend():
+        for statement in [chunk.strip() for chunk in script.split(";") if chunk.strip()]:
+            db.execute(statement)
+        return
+    db.executescript(script)
+
+
 def get_db():
-    # Keep one SQLite connection per request and expose rows like dictionaries.
+    # Keep one database connection per request and expose rows like dictionaries.
     if "db" not in g:
-        g.db = sqlite3.connect(app.config["DATABASE"])
-        g.db.row_factory = sqlite3.Row
+        if is_postgres_backend():
+            g.db = psycopg.connect(app.config["DATABASE_DSN"], row_factory=dict_row)
+        else:
+            g.db = sqlite3.connect(app.config["DATABASE"])
+            g.db.row_factory = sqlite3.Row
         ensure_database_ready(g.db)
     return g.db
 
@@ -156,26 +248,55 @@ def close_db(_error):
 
 def query_db(query, args=(), one=False):
     # Shared helper for SELECT queries.
-    rows = get_db().execute(query, args).fetchall()
+    normalized_query, _ = _normalize_query(query)
+    rows = get_db().execute(normalized_query, args).fetchall()
     return (rows[0] if rows else None) if one else rows
 
 
 def execute_db(query, args=()):
     # Shared helper for INSERT/UPDATE/DELETE queries with an immediate commit.
     db = get_db()
-    cursor = db.execute(query, args)
+    normalized_query, _ = _normalize_query(query)
+    upper_query = normalized_query.lstrip().upper()
+    insert_query = upper_query.startswith("INSERT INTO")
+    if is_postgres_backend() and insert_query and "RETURNING" not in upper_query:
+        normalized_query = f"{normalized_query.rstrip()} RETURNING id"
+    cursor = db.execute(normalized_query, args)
+    lastrowid = getattr(cursor, "lastrowid", None)
+    if is_postgres_backend() and insert_query:
+        lastrowid = _fetch_lastrowid(cursor.fetchone())
     db.commit()
-    return cursor
+    return CursorResult(cursor, lastrowid=lastrowid)
 
 
 def column_exists(db, table_name, column_name):
     # Lightweight schema migration helper used during startup.
+    if is_postgres_backend():
+        row = db.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = %s AND column_name = %s
+            """,
+            (table_name, column_name),
+        ).fetchone()
+        return row is not None
     columns = db.execute(f"PRAGMA table_info({table_name})").fetchall()
     return any(column[1] == column_name for column in columns)
 
 
 def table_exists(db, table_name):
     # Detect whether the base schema table already exists before running migrations.
+    if is_postgres_backend():
+        row = db.execute(
+            """
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = %s
+            """,
+            (table_name,),
+        ).fetchone()
+        return row is not None
     row = db.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
         (table_name,),
@@ -185,6 +306,49 @@ def table_exists(db, table_name):
 
 def ensure_schema_updates(db):
     # Backfill new columns for local databases created before recent features existed.
+    if is_postgres_backend():
+        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS public_key TEXT DEFAULT ''")
+        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS private_key_wrapped TEXT DEFAULT ''")
+        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS private_key_salt TEXT DEFAULT ''")
+        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo_path TEXT DEFAULT ''")
+        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS github_url TEXT DEFAULT ''")
+        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS linkedin_url TEXT DEFAULT ''")
+        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS certifications TEXT DEFAULT ''")
+        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_setup_completed INTEGER NOT NULL DEFAULT 1")
+        db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP")
+        db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_name TEXT DEFAULT ''")
+        db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_path TEXT DEFAULT ''")
+        db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_kind TEXT DEFAULT ''")
+        db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_mime TEXT DEFAULT ''")
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_devices (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                device_token TEXT NOT NULL,
+                label TEXT DEFAULT '',
+                public_key TEXT NOT NULL,
+                revoked_at TIMESTAMP,
+                last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, device_token),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS profile_certificates (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        return
     request_table_sql = db.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'exchange_requests'"
     ).fetchone()
@@ -297,25 +461,32 @@ def user_initials(name):
 
 def init_db():
     # Load the canonical schema from disk and seed the default admin account once.
-    db = sqlite3.connect(app.config["DATABASE"])
+    if is_postgres_backend():
+        db = psycopg.connect(app.config["DATABASE_DSN"], row_factory=dict_row)
+    else:
+        db = sqlite3.connect(app.config["DATABASE"])
     try:
-        ensure_database_ready(db, force_schema_bootstrap=True)
+        ensure_database_ready(db)
     finally:
         db.close()
 
 
 def seed_default_admin(db):
     # Keep the default admin account available for local development.
-    admin = db.execute("SELECT id FROM users WHERE email = ?", ("admin@skillx.local",)).fetchone()
+    lookup_query, _ = _normalize_query("SELECT id FROM users WHERE email = ?")
+    admin = db.execute(lookup_query, ("admin@skillx.local",)).fetchone()
     if admin is None:
+        insert_query, _ = _normalize_query(
+            "INSERT INTO users (name, email, password_hash, bio, is_admin) VALUES (?, ?, ?, ?, 1)"
+        )
         db.execute(
-            "INSERT INTO users (name, email, password_hash, bio, is_admin) VALUES (?, ?, ?, ?, 1)",
+            insert_query,
             ("Admin", "admin@skillx.local", generate_password_hash("admin123"), "Platform administrator"),
         )
 
 
 def bootstrap_state_ready(db):
-    # Keep schema bootstrap state in SQLite so multiple worker processes share one source of truth.
+    # Keep schema bootstrap state in the database so multiple worker processes share one source of truth.
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS app_bootstrap_state (
@@ -328,6 +499,8 @@ def bootstrap_state_ready(db):
     row = db.execute("SELECT schema_ready FROM app_bootstrap_state WHERE id = 1").fetchone()
     if row is None:
         return False
+    if isinstance(row, dict):
+        return bool(row["schema_ready"])
     return bool(row["schema_ready"] if isinstance(row, sqlite3.Row) else row[0])
 
 
@@ -345,22 +518,26 @@ def mark_bootstrap_state_ready(db):
 
 
 def ensure_database_ready(db, *, force_schema_bootstrap=False):
-    # Serialize schema bootstrap through SQLite itself so multi-process workers do not race each other.
+    # Serialize schema bootstrap through the database so multi-process workers do not race each other.
     global SCHEMA_BOOTSTRAPPED
     if SCHEMA_BOOTSTRAPPED and not force_schema_bootstrap:
         return
     with SCHEMA_BOOTSTRAP_LOCK:
         if SCHEMA_BOOTSTRAPPED and not force_schema_bootstrap:
             return
-        db.execute("PRAGMA busy_timeout = 5000")
-        db.execute("BEGIN IMMEDIATE")
+        if is_postgres_backend():
+            db.execute("SELECT pg_advisory_xact_lock(%s)", (POSTGRES_BOOTSTRAP_LOCK_ID,))
+        else:
+            db.execute("PRAGMA busy_timeout = 5000")
+            db.execute("BEGIN IMMEDIATE")
         if bootstrap_state_ready(db) and not force_schema_bootstrap:
             db.commit()
             SCHEMA_BOOTSTRAPPED = True
             return
         if force_schema_bootstrap or not table_exists(db, "users") or not table_exists(db, "exchange_requests"):
-            with open(os.path.join(BASE_DIR, "schema.sql"), "r", encoding="utf-8") as schema_file:
-                db.executescript(schema_file.read())
+            schema_name = "schema_postgres.sql" if is_postgres_backend() else "schema.sql"
+            with open(os.path.join(BASE_DIR, schema_name), "r", encoding="utf-8") as schema_file:
+                execute_schema_script(db, schema_file.read())
         ensure_schema_updates(db)
         seed_default_admin(db)
         mark_bootstrap_state_ready(db)
