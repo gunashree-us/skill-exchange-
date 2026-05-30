@@ -102,3 +102,21 @@ CREATE TABLE IF NOT EXISTS reviews (
     FOREIGN KEY(reviewee_id) REFERENCES users(id),
     FOREIGN KEY(request_id) REFERENCES exchange_requests(id)
 );
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    actor_id INTEGER,
+    request_id INTEGER,
+    message_id INTEGER,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT DEFAULT '',
+    href TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    read_at TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id),
+    FOREIGN KEY(actor_id) REFERENCES users(id),
+    FOREIGN KEY(request_id) REFERENCES exchange_requests(id),
+    FOREIGN KEY(message_id) REFERENCES messages(id)
+);

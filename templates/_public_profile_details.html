@@ -1,0 +1,47 @@
+{% macro public_profile_details(profile) %}
+    {% set public_profile = profile or {} %}
+    {% set has_links = public_profile.github_url or public_profile.linkedin_url %}
+    {% set has_certifications = public_profile.certifications %}
+    {% set has_certificates = public_profile.certificates %}
+    {% if has_links or has_certifications or has_certificates %}
+        <div class="public-profile-details">
+            <div class="stack-label">Public profile</div>
+            <div class="profile-link-grid public-profile-link-grid">
+                <a class="profile-link-card {% if not public_profile.github_url %}is-empty{% endif %}" href="{{ public_profile.github_url or '#' }}" {% if public_profile.github_url %}target="_blank" rel="noopener noreferrer"{% endif %}>
+                    <strong>GitHub</strong>
+                    <span>{{ public_profile.github_url or 'Not shared' }}</span>
+                </a>
+                <a class="profile-link-card {% if not public_profile.linkedin_url %}is-empty{% endif %}" href="{{ public_profile.linkedin_url or '#' }}" {% if public_profile.linkedin_url %}target="_blank" rel="noopener noreferrer"{% endif %}>
+                    <strong>LinkedIn</strong>
+                    <span>{{ public_profile.linkedin_url or 'Not shared' }}</span>
+                </a>
+            </div>
+            {% if has_certifications %}
+                <div class="profile-certifications public-profile-certifications">
+                    <strong>Certificates and credentials</strong>
+                    <p>{{ public_profile.certifications }}</p>
+                </div>
+            {% endif %}
+            {% if has_certificates %}
+                <div class="certificate-stack public-profile-certificate-stack">
+                    {% for certificate in public_profile.certificates %}
+                        <div class="certificate-card public-profile-certificate-card">
+                            <div class="certificate-card-main">
+                                {% if certificate.is_image %}
+                                    <img class="certificate-thumb" src="{{ url_for('static', filename=certificate.static_path) }}" alt="{{ certificate.file_name }}">
+                                {% else %}
+                                    <div class="certificate-file-icon">PDF</div>
+                                {% endif %}
+                                <div>
+                                    <strong><a href="{{ url_for('static', filename=certificate.static_path) }}" target="_blank" rel="noopener noreferrer">{{ certificate.file_name }}</a></strong>
+                                    <span>Uploaded {{ certificate.created_label }}</span>
+                                </div>
+                            </div>
+                            <a href="{{ url_for('static', filename=certificate.static_path) }}" target="_blank" rel="noopener noreferrer">Open</a>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </div>
+    {% endif %}
+{% endmacro %}

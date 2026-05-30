@@ -56,9 +56,15 @@
     <header class="topbar">
         <div class="shell">
             <div class="topbar-inner">
-                <a href="{{ url_for('index') }}" class="brand-mark" data-reset-scroll="true">
-                    <span class="brand-icon">◜</span>
-                    <span class="brand-text">SkillSwap</span>
+                <a href="{{ url_for('index') }}" class="brand-mark {% if current_user %}brand-mark-app{% endif %}" data-reset-scroll="true" aria-label="{% if current_user %}Skill Exchange Platform home{% else %}Skill Exchange Platform{% endif %}">
+                    <span class="brand-icon brand-logo" aria-hidden="true">
+                        <span class="brand-logo-core"></span>
+                        <span class="brand-logo-dot brand-logo-dot-a"></span>
+                        <span class="brand-logo-dot brand-logo-dot-b"></span>
+                    </span>
+                    {% if not current_user %}
+                        <span class="brand-text">Skill Exchange Platform</span>
+                    {% endif %}
                 </a>
 
                 {% if current_user %}
@@ -76,6 +82,14 @@
                         <a href="{{ url_for('dashboard') }}" class="nav-pill {% if active_page == 'dashboard' %}active{% endif %}" data-reset-scroll="true">Dashboard</a>
                         <a href="{{ url_for('skills') }}" class="nav-pill {% if active_page == 'skills' %}active{% endif %}" data-reset-scroll="true">Skills</a>
                         <a href="{{ url_for('matches') }}" class="nav-pill {% if active_page == 'match' %}active{% endif %}" data-reset-scroll="true">Match</a>
+                        <a href="{{ url_for('requests_view') }}" class="nav-pill nav-pill-requests {% if active_page == 'requests' %}active{% endif %}" data-reset-scroll="true">
+                            <span>Requests</span>
+                            {% if request_alert_total %}
+                                <span class="nav-unread-badge" id="navRequestBadge">{{ request_alert_total }}</span>
+                            {% else %}
+                                <span class="nav-unread-badge is-hidden" id="navRequestBadge">0</span>
+                            {% endif %}
+                        </a>
                         <a href="{{ url_for('chat') }}" class="nav-pill nav-pill-chat {% if active_page == 'chat' %}active{% endif %}" data-reset-scroll="true">
                             <span>Chat</span>
                             {% if chat_unread_total %}
@@ -87,10 +101,22 @@
                         <a href="{{ url_for('profile') }}" class="nav-pill {% if active_page == 'profile' %}active{% endif %}" data-reset-scroll="true">Profile</a>
                     </nav>
                     <div class="topbar-actions">
+                        <a href="{{ url_for('notifications') }}" class="nav-pill nav-pill-icon-only topbar-notification-link {% if active_page == 'notifications' %}active{% endif %}" data-reset-scroll="true" title="Notifications" aria-label="Notifications">
+                            <span class="nav-pill-icon" aria-hidden="true">🔔</span>
+                            <span class="sr-only">Notifications</span>
+                            {% if notification_unread_total %}
+                                <span class="nav-unread-badge" id="navNotificationBadge">{{ notification_unread_total }}</span>
+                            {% else %}
+                                <span class="nav-unread-badge is-hidden" id="navNotificationBadge">0</span>
+                            {% endif %}
+                        </a>
                         {% if current_user.is_admin %}
                             <a href="{{ url_for('admin') }}" class="ghost-link" data-reset-scroll="true">Admin</a>
                         {% endif %}
-                        <a href="{{ url_for('logout') }}" class="ghost-link" data-reset-scroll="true">Logout</a>
+                        <form method="post" action="{{ url_for('logout') }}" class="inline-form">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="ghost-link">Logout</button>
+                        </form>
                     </div>
                 {% else %}
                     <div class="topbar-actions">
@@ -117,11 +143,27 @@
     </main>
     {% if current_user %}
     <script>
+        window.skillSwapSocketOptions = window.skillSwapSocketOptions || {
+            transports: ["websocket", "polling"],
+            upgrade: true,
+            rememberUpgrade: true,
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 500,
+            reconnectionDelayMax: 3000,
+            timeout: 20000,
+        };
+
         const navToggle = document.getElementById("navToggle");
         const topbarInner = document.querySelector(".topbar-inner");
         const mainNav = document.getElementById("mainNav");
         const navUnreadBadge = document.getElementById("navUnreadBadge");
+        const navRequestBadge = document.getElementById("navRequestBadge");
+        const navNotificationBadge = document.getElementById("navNotificationBadge");
         const defaultTitle = document.title;
+        let currentChatUnread = {{ chat_unread_total or 0 }};
+        let currentRequestAlerts = {{ request_alert_total or 0 }};
+        let currentNotificationAlerts = {{ notification_unread_total or 0 }};
 
         if (navToggle && topbarInner && mainNav) {
             const closeNav = () => {
@@ -146,29 +188,458 @@
             });
         }
 
-        function updateNavUnread(totalUnread) {
-            if (!navUnreadBadge) return;
-            if (totalUnread > 0) {
-                navUnreadBadge.textContent = totalUnread > 99 ? "99+" : String(totalUnread);
-                navUnreadBadge.classList.remove("is-hidden");
-                document.title = `(${totalUnread}) ${defaultTitle}`;
+        function updateDocumentAlertTitle() {
+            const totalAlerts = currentNotificationAlerts || (currentChatUnread + currentRequestAlerts);
+            if (totalAlerts > 0) {
+                document.title = `(${totalAlerts}) ${defaultTitle}`;
             } else {
-                navUnreadBadge.textContent = "0";
-                navUnreadBadge.classList.add("is-hidden");
                 document.title = defaultTitle;
             }
         }
 
-        window.skillSwapNotificationSocket = window.skillSwapNotificationSocket || io();
+        function updateNavUnread(totalUnread) {
+            currentChatUnread = totalUnread;
+            if (!navUnreadBadge) return;
+            if (totalUnread > 0) {
+                navUnreadBadge.textContent = totalUnread > 99 ? "99+" : String(totalUnread);
+                navUnreadBadge.classList.remove("is-hidden");
+            } else {
+                navUnreadBadge.textContent = "0";
+                navUnreadBadge.classList.add("is-hidden");
+            }
+            updateDocumentAlertTitle();
+        }
+
+        function updateRequestBadge(totalAlerts) {
+            currentRequestAlerts = totalAlerts;
+            if (!navRequestBadge) return;
+            if (totalAlerts > 0) {
+                navRequestBadge.textContent = totalAlerts > 99 ? "99+" : String(totalAlerts);
+                navRequestBadge.classList.remove("is-hidden");
+            } else {
+                navRequestBadge.textContent = "0";
+                navRequestBadge.classList.add("is-hidden");
+            }
+            updateDocumentAlertTitle();
+        }
+
+        function updateNotificationBadge(totalAlerts) {
+            currentNotificationAlerts = totalAlerts;
+            if (!navNotificationBadge) {
+                updateDocumentAlertTitle();
+                return;
+            }
+            if (totalAlerts > 0) {
+                navNotificationBadge.textContent = totalAlerts > 99 ? "99+" : String(totalAlerts);
+                navNotificationBadge.classList.remove("is-hidden");
+            } else {
+                navNotificationBadge.textContent = "0";
+                navNotificationBadge.classList.add("is-hidden");
+            }
+            updateDocumentAlertTitle();
+        }
+
+        let activeIncomingCallBanner = null;
+
+        function removeIncomingCallBanner() {
+            if (activeIncomingCallBanner) {
+                activeIncomingCallBanner.remove();
+                activeIncomingCallBanner = null;
+            }
+        }
+
+        function showIncomingCallBanner(payload) {
+            removeIncomingCallBanner();
+            const callerName = String(payload?.caller_name || "Your exchange partner");
+            const href = String(payload?.href || "/chat");
+            const banner = document.createElement("div");
+            banner.className = "flash-stack";
+            banner.style.position = "fixed";
+            banner.style.right = "1rem";
+            banner.style.bottom = "1rem";
+            banner.style.zIndex = "9999";
+            banner.style.maxWidth = "22rem";
+            banner.innerHTML = `
+                <div class="flash flash-info" style="display:flex;gap:0.75rem;align-items:flex-start;box-shadow:0 18px 45px rgba(15, 23, 42, 0.18);">
+                    <div style="flex:1;">
+                        <strong>Incoming video call</strong>
+                        <div>${callerName} is calling you.</div>
+                    </div>
+                    <a href="${href}" class="button button-dark small-button">Open</a>
+                </div>
+            `;
+            document.body.appendChild(banner);
+            activeIncomingCallBanner = banner;
+            window.setTimeout(() => {
+                if (activeIncomingCallBanner === banner) {
+                    removeIncomingCallBanner();
+                }
+            }, 20000);
+        }
+
+        function notifyIncomingCall(payload) {
+            const callerName = String(payload?.caller_name || "Your exchange partner");
+            const href = String(payload?.href || "/chat");
+            showIncomingCallBanner(payload);
+            if ("Notification" in window && Notification.permission === "granted") {
+                const notification = new Notification("Incoming SkillSwap Call", {
+                    body: `${callerName} is calling you.`,
+                    tag: `skillswap-call-${payload?.caller_id || "partner"}`,
+                });
+                notification.onclick = () => {
+                    window.focus();
+                    window.location.href = href;
+                    notification.close();
+                };
+            }
+        }
+
+        const notificationCsrfToken = {{ csrf_token()|tojson }};
+        window.skillSwapNotificationSocket = window.skillSwapNotificationSocket || io(window.location.origin, window.skillSwapSocketOptions);
         window.skillSwapNotificationSocket.on("connect", () => {
-            window.skillSwapNotificationSocket.emit("register_notifications");
+            window.skillSwapNotificationSocket.emit("register_notifications", {csrf_token: notificationCsrfToken});
         });
         window.skillSwapNotificationSocket.on("chat_notification", (payload) => {
             updateNavUnread(payload.total_unread || 0);
             window.dispatchEvent(new CustomEvent("skillswap:chat-notification", { detail: payload }));
         });
+        window.skillSwapNotificationSocket.on("request_notification", (payload) => {
+            updateRequestBadge(payload.total_request_alerts || 0);
+            window.dispatchEvent(new CustomEvent("skillswap:request-notification", { detail: payload }));
+        });
+        window.skillSwapNotificationSocket.on("notification_feed", (payload) => {
+            updateNotificationBadge(payload.total_unread || 0);
+            window.dispatchEvent(new CustomEvent("skillswap:notification-feed", { detail: payload }));
+        });
+        window.skillSwapNotificationSocket.on("incoming_call", (payload) => {
+            notifyIncomingCall(payload);
+            window.dispatchEvent(new CustomEvent("skillswap:incoming-call", { detail: payload }));
+        });
 
         updateNavUnread({{ chat_unread_total or 0 }});
+        updateRequestBadge({{ request_alert_total or 0 }});
+        updateNotificationBadge({{ notification_unread_total or 0 }});
+
+        if ("Notification" in window && Notification.permission === "default") {
+            document.addEventListener("click", () => {
+                Notification.requestPermission().catch(() => {});
+            }, { once: true });
+        }
+
+        if (!{{ (current_user.is_admin if current_user else False)|tojson }}) {
+            const secureAccountBootstrap = {
+                userId: {{ current_user.id|tojson }},
+                publicKey: {{ (current_user["public_key"] or "")|tojson }},
+                privateKeyWrapped: {{ (current_user["private_key_wrapped"] or "")|tojson }},
+                privateKeySalt: {{ (current_user["private_key_salt"] or "")|tojson }},
+                csrfToken: notificationCsrfToken,
+                registerUrl: {{ url_for('register_device')|tojson }},
+            };
+
+            window.SkillSwapSecureKeys = window.SkillSwapSecureKeys || (() => {
+                function bytesToBase64(bytes) {
+                    return btoa(String.fromCharCode(...bytes));
+                }
+
+                function base64ToBytes(value) {
+                    return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+                }
+
+                function isValidBase64(value) {
+                    if (!value || typeof value !== "string") return false;
+                    try {
+                        atob(value);
+                        return true;
+                    } catch (_error) {
+                        return false;
+                    }
+                }
+
+                function accountPublicKeyStorageKey(userId) {
+                    return `skillswap:e2ee:account-public:${userId}`;
+                }
+
+                function localPrivateKeyStorageKey(userId) {
+                    return `skillswap:e2ee:device-private:${userId}`;
+                }
+
+                function localDeviceSecretStorageKey(userId) {
+                    return `skillswap:e2ee:device-secret:${userId}`;
+                }
+
+                function getOrCreateDeviceSecret(userId) {
+                    let secret = localStorage.getItem(localDeviceSecretStorageKey(userId)) || "";
+                    if (!isValidBase64(secret)) {
+                        secret = bytesToBase64(crypto.getRandomValues(new Uint8Array(32)));
+                        localStorage.setItem(localDeviceSecretStorageKey(userId), secret);
+                    }
+                    return secret;
+                }
+
+                async function importPrivateKey(base64Key) {
+                    return crypto.subtle.importKey(
+                        "pkcs8",
+                        base64ToBytes(base64Key),
+                        {name: "RSA-OAEP", hash: "SHA-256"},
+                        false,
+                        ["decrypt"],
+                    );
+                }
+
+                async function importPublicKey(base64Key) {
+                    return crypto.subtle.importKey(
+                        "spki",
+                        base64ToBytes(base64Key),
+                        {name: "RSA-OAEP", hash: "SHA-256"},
+                        false,
+                        ["encrypt"],
+                    );
+                }
+
+                async function verifyKeyPair(publicKeyBase64, privateKey) {
+                    if (!publicKeyBase64 || !privateKey || !isValidBase64(publicKeyBase64)) {
+                        return false;
+                    }
+                    try {
+                        const publicKey = await importPublicKey(publicKeyBase64);
+                        const probe = crypto.getRandomValues(new Uint8Array(32));
+                        const wrappedProbe = await crypto.subtle.encrypt({name: "RSA-OAEP"}, publicKey, probe);
+                        const unwrappedProbe = await crypto.subtle.decrypt({name: "RSA-OAEP"}, privateKey, wrappedProbe);
+                        return bytesToBase64(new Uint8Array(unwrappedProbe)) === bytesToBase64(probe);
+                    } catch (_error) {
+                        return false;
+                    }
+                }
+
+                async function wrapPrivateKeyForDevice(base64PrivateKey, userId) {
+                    const iv = crypto.getRandomValues(new Uint8Array(12));
+                    const wrappingKey = await crypto.subtle.importKey(
+                        "raw",
+                        base64ToBytes(getOrCreateDeviceSecret(userId)),
+                        {name: "AES-GCM"},
+                        false,
+                        ["encrypt"],
+                    );
+                    const ciphertext = await crypto.subtle.encrypt(
+                        {name: "AES-GCM", iv},
+                        wrappingKey,
+                        base64ToBytes(base64PrivateKey),
+                    );
+                    const payload = JSON.stringify({
+                        v: 1,
+                        iv: bytesToBase64(iv),
+                        ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
+                    });
+                    localStorage.setItem(localPrivateKeyStorageKey(userId), payload);
+                }
+
+                async function readPrivateKeyBase64(userId) {
+                    const rawPayload = localStorage.getItem(localPrivateKeyStorageKey(userId)) || "";
+                    if (!rawPayload) {
+                        return "";
+                    }
+                    try {
+                        const payload = JSON.parse(rawPayload);
+                        if (!isValidBase64(payload.iv || "") || !isValidBase64(payload.ciphertext || "")) {
+                            throw new Error("Invalid secure key payload.");
+                        }
+                        const wrappingKey = await crypto.subtle.importKey(
+                            "raw",
+                            base64ToBytes(getOrCreateDeviceSecret(userId)),
+                            {name: "AES-GCM"},
+                            false,
+                            ["decrypt"],
+                        );
+                        const privateKeyBytes = await crypto.subtle.decrypt(
+                            {name: "AES-GCM", iv: base64ToBytes(payload.iv)},
+                            wrappingKey,
+                            base64ToBytes(payload.ciphertext),
+                        );
+                        return bytesToBase64(new Uint8Array(privateKeyBytes));
+                    } catch (_error) {
+                        localStorage.removeItem(localPrivateKeyStorageKey(userId));
+                        return "";
+                    }
+                }
+
+                async function loadLocalPrivateKey(userId) {
+                    const privateKeyBase64 = await readPrivateKeyBase64(userId);
+                    return privateKeyBase64 ? importPrivateKey(privateKeyBase64) : null;
+                }
+
+                function clearLocalPrivateKey(userId) {
+                    localStorage.removeItem(localPrivateKeyStorageKey(userId));
+                }
+
+                function clearSecureState(userId) {
+                    clearLocalPrivateKey(userId);
+                    localStorage.removeItem(accountPublicKeyStorageKey(userId));
+                }
+
+                return {
+                    accountPublicKeyStorageKey,
+                    base64ToBytes,
+                    bytesToBase64,
+                    clearLocalPrivateKey,
+                    clearSecureState,
+                    importPrivateKey,
+                    importPublicKey,
+                    isValidBase64,
+                    loadLocalPrivateKey,
+                    readPrivateKeyBase64,
+                    verifyKeyPair,
+                    wrapPrivateKeyForDevice,
+                };
+            })();
+
+            async function bootstrapSecureAccountKey() {
+                if (!window.crypto?.subtle || !window.localStorage) return;
+
+                const keyStore = window.SkillSwapSecureKeys;
+                const password = sessionStorage.getItem("skillswap:last-login-password") || "";
+                const publicKeyStorageKey = keyStore.accountPublicKeyStorageKey(secureAccountBootstrap.userId);
+
+                async function deriveWrappingKey(secret, saltBytes) {
+                    const baseKey = await crypto.subtle.importKey(
+                        "raw",
+                        new TextEncoder().encode(secret),
+                        "PBKDF2",
+                        false,
+                        ["deriveKey"],
+                    );
+                    return crypto.subtle.deriveKey(
+                        {
+                            name: "PBKDF2",
+                            salt: saltBytes,
+                            iterations: 250000,
+                            hash: "SHA-256",
+                        },
+                        baseKey,
+                        {name: "AES-GCM", length: 256},
+                        false,
+                        ["encrypt", "decrypt"],
+                    );
+                }
+
+                async function wrapPrivateKeyForPassword(base64PrivateKey, secret) {
+                    const salt = crypto.getRandomValues(new Uint8Array(16));
+                    const iv = crypto.getRandomValues(new Uint8Array(12));
+                    const wrappingKey = await deriveWrappingKey(secret, salt);
+                    const ciphertext = await crypto.subtle.encrypt(
+                        {name: "AES-GCM", iv},
+                        wrappingKey,
+                        keyStore.base64ToBytes(base64PrivateKey),
+                    );
+                    return {
+                        wrapped: keyStore.bytesToBase64(new Uint8Array(ciphertext)),
+                        salt: keyStore.bytesToBase64(salt),
+                        iv: keyStore.bytesToBase64(iv),
+                    };
+                }
+
+                async function unwrapPrivateKeyBase64ForPassword(payload, secret) {
+                    const wrappingKey = await deriveWrappingKey(secret, keyStore.base64ToBytes(payload.salt));
+                    const privateKeyBytes = await crypto.subtle.decrypt(
+                        {name: "AES-GCM", iv: keyStore.base64ToBytes(payload.iv)},
+                        wrappingKey,
+                        keyStore.base64ToBytes(payload.wrapped),
+                    );
+                    return keyStore.bytesToBase64(new Uint8Array(privateKeyBytes));
+                }
+
+                let publicKeyB64 = localStorage.getItem(publicKeyStorageKey) || secureAccountBootstrap.publicKey || "";
+                let privateKey = await keyStore.loadLocalPrivateKey(secureAccountBootstrap.userId);
+                let wrappedPrivateKey = secureAccountBootstrap.privateKeyWrapped || "";
+                let keySalt = secureAccountBootstrap.privateKeySalt || "";
+                const hasServerKeyMaterial = Boolean(
+                    secureAccountBootstrap.publicKey
+                    && secureAccountBootstrap.privateKeyWrapped
+                    && secureAccountBootstrap.privateKeySalt
+                );
+
+                if (hasServerKeyMaterial && publicKeyB64 && publicKeyB64 !== secureAccountBootstrap.publicKey) {
+                    keyStore.clearLocalPrivateKey(secureAccountBootstrap.userId);
+                    localStorage.removeItem(publicKeyStorageKey);
+                    publicKeyB64 = secureAccountBootstrap.publicKey;
+                    privateKey = null;
+                }
+
+                if (
+                    !privateKey
+                    && publicKeyB64
+                    && keyStore.isValidBase64(wrappedPrivateKey)
+                    && keyStore.isValidBase64(keySalt)
+                    && password
+                ) {
+                    try {
+                        const wrappedPayload = JSON.parse(atob(wrappedPrivateKey));
+                        const privateKeyBase64 = await unwrapPrivateKeyBase64ForPassword(
+                            {
+                                wrapped: wrappedPayload.wrapped,
+                                iv: wrappedPayload.iv,
+                                salt: keySalt,
+                            },
+                            password,
+                        );
+                        privateKey = await keyStore.importPrivateKey(privateKeyBase64);
+                        await keyStore.wrapPrivateKeyForDevice(privateKeyBase64, secureAccountBootstrap.userId);
+                    } catch (_error) {
+                        privateKey = null;
+                    }
+                }
+
+                if (privateKey && publicKeyB64 && !(await keyStore.verifyKeyPair(publicKeyB64, privateKey))) {
+                    keyStore.clearSecureState(secureAccountBootstrap.userId);
+                    publicKeyB64 = hasServerKeyMaterial ? secureAccountBootstrap.publicKey : "";
+                    privateKey = null;
+                }
+
+                if (!privateKey && !hasServerKeyMaterial && password) {
+                    const pair = await crypto.subtle.generateKey(
+                        {
+                            name: "RSA-OAEP",
+                            modulusLength: 2048,
+                            publicExponent: new Uint8Array([1, 0, 1]),
+                            hash: "SHA-256",
+                        },
+                        true,
+                        ["encrypt", "decrypt"],
+                    );
+                    publicKeyB64 = keyStore.bytesToBase64(new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey)));
+                    const privateKeyBytes = keyStore.bytesToBase64(new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey)));
+                    const wrapped = await wrapPrivateKeyForPassword(privateKeyBytes, password);
+                    wrappedPrivateKey = btoa(JSON.stringify({wrapped: wrapped.wrapped, iv: wrapped.iv}));
+                    keySalt = wrapped.salt;
+                    privateKey = await keyStore.importPrivateKey(privateKeyBytes);
+                    await keyStore.wrapPrivateKeyForDevice(privateKeyBytes, secureAccountBootstrap.userId);
+                    localStorage.setItem(publicKeyStorageKey, publicKeyB64);
+                }
+
+                if (!publicKeyB64 || !privateKey || !wrappedPrivateKey || !keySalt) return;
+                if (
+                    secureAccountBootstrap.publicKey === publicKeyB64
+                    && secureAccountBootstrap.privateKeyWrapped === wrappedPrivateKey
+                    && secureAccountBootstrap.privateKeySalt === keySalt
+                ) {
+                    return;
+                }
+
+                await fetch(secureAccountBootstrap.registerUrl, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRFToken": secureAccountBootstrap.csrfToken,
+                    },
+                    body: JSON.stringify({
+                        public_key: publicKeyB64,
+                        private_key_wrapped: wrappedPrivateKey,
+                        private_key_salt: keySalt,
+                    }),
+                });
+            }
+
+            void bootstrapSecureAccountKey().catch(() => {});
+        }
     </script>
     {% endif %}
 </body>

@@ -18,7 +18,9 @@ from services.notifications import (
     can_chat_with,
     cleanup_conference_room,
     conference_room_members,
+    create_notification,
     emit_chat_notification,
+    emit_incoming_call_notification,
     mark_conversation_read,
     room_name_for_users,
     serialize_message,
@@ -50,8 +52,10 @@ def join_chat_room(data):
 
 
 @socketio.on("register_notifications")
-def register_notifications():
+def register_notifications(data=None):
     # Every logged-in page joins a personal room so unread badges can update live.
+    if not validate_socket_csrf(data):
+        return
     user_id = session.get("user_id")
     if not user_id:
         return
@@ -151,7 +155,13 @@ def video_call_invite(data):
         return
     user_id = session.get("user_id")
     partner_id = int((data or {}).get("partner_id", 0))
-    emit_call_event("video_call_invite", user_id, partner_id)
+    if emit_call_event("video_call_invite", user_id, partner_id):
+        caller = query_db("SELECT name FROM users WHERE id = ?", (user_id,), one=True) if user_id else None
+        emit_incoming_call_notification(
+            partner_id,
+            caller_id=user_id,
+            caller_name=(caller["name"] if caller else "Your exchange partner"),
+        )
 
 
 @socketio.on("video_call_accept")
@@ -440,6 +450,7 @@ def socket_send_message(data):
         )
 
     message = dict(query_db("SELECT * FROM messages WHERE id = ?", (cursor.lastrowid,), one=True))
+    sender = query_db("SELECT name FROM users WHERE id = ?", (user_id,), one=True)
     emit("chat_message", serialize_message(message, user_id), to=request.sid)
     emit(
         "chat_message",
@@ -449,6 +460,15 @@ def socket_send_message(data):
     )
     if partner_online:
         emit("message_status", {"ids": [message["id"]], "status": "Delivered"}, room=user_room_name(user_id))
+    create_notification(
+        partner_id,
+        "chat",
+        f"New chat message from {sender['name'] if sender else 'your exchange partner'}",
+        body="Open chat to read the latest message.",
+        href=f"/chat?partner_id={user_id}",
+        actor_id=user_id,
+        message_id=message["id"],
+    )
     emit_chat_notification(user_id, partner_id=partner_id)
     emit_chat_notification(partner_id, partner_id=user_id)
 

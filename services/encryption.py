@@ -19,7 +19,7 @@ def is_encrypted_message_body(body):
 def message_preview(body, attachment_kind=""):
     # Never leak ciphertext into the thread list preview.
     if is_encrypted_message_body(body):
-        return "Encrypted message. Unlock to read."
+        return "Legacy secure message"
     if body:
         return body
     if attachment_kind == "image":

@@ -24,7 +24,7 @@
                     <div class="profile-meta">
                         <span>📍 {{ current_user.availability or 'Add your location or availability' }}</span>
                         <span>✉ {{ current_user.email }}</span>
-                        <span>📅 Joined {{ current_user.created_at[:7] if current_user.created_at else 'January 2026' }}</span>
+                        <span>📅 Joined {{ current_user.created_at.strftime('%B %Y') if current_user.created_at else 'January 2026' }}</span>
                     </div>
                     <div class="profile-link-grid">
                         <a class="profile-link-card {% if not current_user.github_url %}is-empty{% endif %}" href="{{ current_user.github_url or '#' }}" {% if current_user.github_url %}target="_blank" rel="noopener noreferrer"{% endif %}>

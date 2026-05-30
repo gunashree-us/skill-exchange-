@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_public_profile_details.html" import public_profile_details %}
 {% macro recommendation_card(person, mode='discover') %}
     <article class="match-card">
         <div class="match-head">
@@ -70,6 +71,7 @@
                 </div>
                 <div class="match-details-panel is-collapsed">
                     <p class="match-bio">{{ person.bio }}</p>
+                    {{ public_profile_details(person.public_profile) }}
                     <div class="request-grid compact-request-grid">
                         <label>You're offering
                             <input type="text" value="{{ person.request_teach_skill_name }}" readonly tabindex="-1">
@@ -112,6 +114,7 @@
                 {% if person.bio %}
                     <p class="match-bio">{{ person.bio }}</p>
                 {% endif %}
+                {{ public_profile_details(person.public_profile) }}
                 <p class="match-meta">
                     {% if not my_teach %}
                         Add a skill you can teach first, then you can send exchange requests from these cards.

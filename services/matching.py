@@ -2,7 +2,8 @@ from collections import defaultdict
 
 from flask import url_for
 
-from core import LEVEL_ORDER, query_db, user_initials
+from core import LEVEL_ORDER, format_timestamp, query_db, user_initials
+from uploads import is_previewable_image
 
 
 def normalize_availability(value):
@@ -53,6 +54,62 @@ def load_skill_maps(user_ids):
             "level": row["level"],
         }
     return grouped
+
+
+def load_public_profile_maps(user_ids):
+    # Load the public trust signals we want to expose on match and request cards.
+    if isinstance(user_ids, int):
+        user_ids = [user_ids]
+    user_ids = [int(user_id) for user_id in user_ids]
+    if not user_ids:
+        return {}
+
+    placeholders = ", ".join("?" for _ in user_ids)
+    users = query_db(
+        f"""
+        SELECT id, github_url, linkedin_url, certifications
+        FROM users
+        WHERE id IN ({placeholders})
+        """,
+        tuple(user_ids),
+    )
+    certificates = query_db(
+        f"""
+        SELECT user_id, file_name, file_path, created_at
+        FROM profile_certificates
+        WHERE user_id IN ({placeholders})
+        ORDER BY user_id, created_at DESC, id DESC
+        """,
+        tuple(user_ids),
+    )
+    certificate_maps = {user_id: [] for user_id in user_ids}
+    for certificate in certificates:
+        file_path = str(certificate.get("file_path") or "").strip()
+        if not file_path:
+            continue
+        try:
+            static_path = file_path.replace("static/", "", 1)
+        except Exception:
+            continue
+        if not static_path:
+            continue
+        certificate_map = {
+            "file_name": str(certificate.get("file_name") or "Certificate file"),
+            "static_path": static_path,
+            "created_label": format_timestamp(certificate.get("created_at"), include_date=True),
+            "is_image": is_previewable_image(certificate.get("file_name") or ""),
+        }
+        certificate_maps.setdefault(certificate["user_id"], []).append(certificate_map)
+
+    public_maps = {}
+    for user in users:
+        public_maps[user["id"]] = {
+            "github_url": user["github_url"] or "",
+            "linkedin_url": user["linkedin_url"] or "",
+            "certifications": user["certifications"] or "",
+            "certificates": certificate_maps.get(user["id"], []),
+        }
+    return public_maps
 
 
 def level_gap(first_level, second_level):
@@ -246,7 +303,18 @@ def apply_recommendation_filters(entry, *, term="", category="", level="", min_r
     return not term or term in searchable
 
 
-def build_teacher_suggestions(current_user, candidate_rows, candidate_skill_maps, *, term="", category="", level="", min_rating=0, availability=""):
+def build_teacher_suggestions(
+    current_user,
+    candidate_rows,
+    candidate_skill_maps,
+    *,
+    term="",
+    category="",
+    level="",
+    min_rating=0,
+    availability="",
+    public_profile_maps=None,
+):
     # Suggest teachers even without a strict two-way barter yet.
     current_user = dict(current_user)
     my_skills_map = load_skill_maps(current_user["id"]).get(current_user["id"], {"teach": {}, "learn": {}})
@@ -323,6 +391,7 @@ def build_teacher_suggestions(current_user, candidate_rows, candidate_skill_maps
             "search_tokens": [item["name"] for item in matched_teach[:4]],
             "shared_count": len(overlap_names),
             "can_request_exchange": bool(request_pair),
+            "public_profile": (public_profile_maps or {}).get(candidate["id"], {}),
         }
         if request_pair:
             entry.update(request_pair)
@@ -333,7 +402,18 @@ def build_teacher_suggestions(current_user, candidate_rows, candidate_skill_maps
     return ranked
 
 
-def build_learner_suggestions(current_user, candidate_rows, candidate_skill_maps, *, term="", category="", level="", min_rating=0, availability=""):
+def build_learner_suggestions(
+    current_user,
+    candidate_rows,
+    candidate_skill_maps,
+    *,
+    term="",
+    category="",
+    level="",
+    min_rating=0,
+    availability="",
+    public_profile_maps=None,
+):
     # Surface people who actively want what the current member can teach.
     current_user = dict(current_user)
     my_skills_map = load_skill_maps(current_user["id"]).get(current_user["id"], {"teach": {}, "learn": {}})
@@ -409,6 +489,7 @@ def build_learner_suggestions(current_user, candidate_rows, candidate_skill_maps
             "search_tokens": [item["name"] for item in matched_learn[:4]],
             "shared_count": len(overlap_names),
             "can_request_exchange": bool(request_pair),
+            "public_profile": (public_profile_maps or {}).get(candidate["id"], {}),
         }
         if request_pair:
             entry.update(request_pair)
@@ -419,7 +500,18 @@ def build_learner_suggestions(current_user, candidate_rows, candidate_skill_maps
     return ranked
 
 
-def build_trending_interest_recommendations(current_user, candidate_rows, candidate_skill_maps, *, term="", category="", level="", min_rating=0, availability=""):
+def build_trending_interest_recommendations(
+    current_user,
+    candidate_rows,
+    candidate_skill_maps,
+    *,
+    term="",
+    category="",
+    level="",
+    min_rating=0,
+    availability="",
+    public_profile_maps=None,
+):
     # Show active members in the same categories even when a strict barter path is not ready yet.
     current_user = dict(current_user)
     my_skills_map = load_skill_maps(current_user["id"]).get(current_user["id"], {"teach": {}, "learn": {}})
@@ -481,6 +573,7 @@ def build_trending_interest_recommendations(current_user, candidate_rows, candid
             "search_tokens": [item["name"] for item in category_skills[:6]] + shared_categories,
             "shared_count": len(shared_categories),
             "can_request_exchange": bool(request_pair),
+            "public_profile": (public_profile_maps or {}).get(candidate["id"], {}),
         }
         if request_pair:
             entry.update(request_pair)
@@ -491,7 +584,7 @@ def build_trending_interest_recommendations(current_user, candidate_rows, candid
     return ranked
 
 
-def build_ranked_matches(current_user, *, term="", category="", level="", min_rating=0, availability=""):
+def build_ranked_matches(current_user, *, term="", category="", level="", min_rating=0, availability="", public_profile_maps=None):
     # Build one ranked match list that powers both the dashboard and layered match browser.
     my_skills_map = load_skill_maps(current_user["id"]).get(current_user["id"], {"teach": {}, "learn": {}})
     if not my_skills_map["teach"] or not my_skills_map["learn"]:
@@ -564,6 +657,7 @@ def build_ranked_matches(current_user, *, term="", category="", level="", min_ra
                 "request_teach_skill_name": score["request_teach_skill_name"],
                 "request_learn_skill_id": score["request_learn_skill_id"],
                 "request_learn_skill_name": score["request_learn_skill_name"],
+                "public_profile": (public_profile_maps or {}).get(candidate["id"], {}),
             }
         )
 
@@ -575,6 +669,7 @@ def layered_recommendations_for_user(current_user, *, term="", category="", leve
     current_user = dict(current_user)
     candidate_rows = recommendation_candidate_rows(current_user["id"])
     candidate_skill_maps = load_skill_maps([row["id"] for row in candidate_rows])
+    public_profile_maps = load_public_profile_maps([row["id"] for row in candidate_rows])
     mutual_matches, categories = build_ranked_matches(
         current_user,
         term=term,
@@ -582,6 +677,7 @@ def layered_recommendations_for_user(current_user, *, term="", category="", leve
         level=level,
         min_rating=min_rating,
         availability=availability,
+        public_profile_maps=public_profile_maps,
     )
     suggested_teachers = build_teacher_suggestions(
         current_user,
@@ -592,6 +688,7 @@ def layered_recommendations_for_user(current_user, *, term="", category="", leve
         level=level,
         min_rating=min_rating,
         availability=availability,
+        public_profile_maps=public_profile_maps,
     )
     suggested_learners = build_learner_suggestions(
         current_user,
@@ -602,6 +699,7 @@ def layered_recommendations_for_user(current_user, *, term="", category="", leve
         level=level,
         min_rating=min_rating,
         availability=availability,
+        public_profile_maps=public_profile_maps,
     )
     trending = build_trending_interest_recommendations(
         current_user,
@@ -612,6 +710,7 @@ def layered_recommendations_for_user(current_user, *, term="", category="", leve
         level=level,
         min_rating=min_rating,
         availability=availability,
+        public_profile_maps=public_profile_maps,
     )
     seen_user_ids = set()
 
@@ -726,5 +825,3 @@ def onboarding_steps_for_user(
         {"done": accepted_count > 0, "title": "Get your first accepted exchange", "href": url_for("requests_view"), "cta": "Review requests"},
     ]
     return steps
-
-

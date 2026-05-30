@@ -1,7 +1,15 @@
 from flask import flash, g, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from core import MAX_EMAIL_LENGTH, MAX_NAME_LENGTH, MAX_PASSWORD_LENGTH, app, execute_db, query_db, validate_text
+from core import (
+    MAX_EMAIL_LENGTH,
+    MAX_NAME_LENGTH,
+    MAX_PASSWORD_LENGTH,
+    app,
+    execute_db,
+    query_user_by_email,
+    validate_text,
+)
 
 
 @app.route("/register", methods=["GET", "POST"])
@@ -21,7 +29,7 @@ def register():
             password = validate_text(request.form.get("password"), "Password", MAX_PASSWORD_LENGTH, min_length=8, required=True)
             if "@" not in email or "." not in email.split("@")[-1]:
                 raise ValueError("Enter a valid email address.")
-            if query_db("SELECT id FROM users WHERE email = ?", (email,), one=True):
+            if query_user_by_email(email):
                 raise ValueError("An account with that email already exists.")
             cursor = execute_db(
                 "INSERT INTO users (name, email, password_hash, profile_setup_completed) VALUES (?, ?, ?, 0)",
@@ -49,7 +57,7 @@ def login():
     if request.method == "POST":
         email = validate_text(request.form.get("email"), "Email", MAX_EMAIL_LENGTH, required=True).lower()
         password = validate_text(request.form.get("password"), "Password", MAX_PASSWORD_LENGTH, required=True)
-        user = query_db("SELECT * FROM users WHERE email = ?", (email,), one=True)
+        user = query_user_by_email(email)
         if user is None or not check_password_hash(user["password_hash"], password):
             flash("Invalid email or password.", "danger")
         else:
@@ -64,7 +72,7 @@ def login():
     return render_template("login.html", active_page="login")
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 def logout():
     # Remove the authenticated session.
     session.clear()

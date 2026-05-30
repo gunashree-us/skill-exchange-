@@ -1,36 +1,55 @@
 {% extends "base.html" %}
+{% from "_public_profile_details.html" import public_profile_details %}
 {% block content %}
 <section class="soft-band page-band">
-    <div class="shell">
-        <div class="page-heading">
+    <div class="shell requests-shell">
+        <div class="page-heading requests-heading">
             <h1>Exchange Requests</h1>
             <p>Track incoming requests, sent proposals, and leave feedback after accepted sessions.</p>
         </div>
 
-        <div class="two-col-layout">
-            <article class="surface-card">
-                <h2>Received Requests</h2>
-                <div class="list-stack">
+        <div class="two-col-layout requests-grid">
+            <article class="surface-card requests-panel">
+                <div class="card-title-row requests-panel-head">
+                    <div>
+                        <h2>Received Requests</h2>
+                        <p>Review new exchange proposals and respond with a decision or a counter-offer.</p>
+                    </div>
+                    <span class="status-pill light">{{ received|length }} open</span>
+                </div>
+                <div class="list-stack requests-stack">
                     {% for item in received %}
-                        <div class="request-line">
-                            <div>
-                                <strong>{{ item.sender_name }}</strong>
-                                <span>Offers {{ item.offer_skill }} and wants {{ item.request_skill }}</span>
-                                <p>{{ item.message or 'No message provided.' }}</p>
-                                <p>Proposed: {{ item.proposed_time or 'No time proposed yet' }} · {{ item.duration_minutes }} min</p>
+                        <div class="request-line request-card">
+                            <div class="request-card-copy">
+                                <div class="request-card-head">
+                                    <div>
+                                        <strong>{{ item.sender_name }}</strong>
+                                        <span>Offers {{ item.offer_skill }} and wants {{ item.request_skill }}</span>
+                                    </div>
+                                    <span class="status-pill {{ item.status|lower }}">{{ item.status }}</span>
+                                </div>
+                                <p class="request-card-message">{{ item.message or 'No message provided.' }}</p>
+                                <div class="request-meta-row">
+                                    <span class="request-meta-chip">Proposed {{ item.proposed_time or 'No time proposed yet' }}</span>
+                                    <span class="request-meta-chip">{{ item.duration_minutes }} min</span>
+                                </div>
                                 {% if item.schedule_note %}
-                                    <p>Schedule note: {{ item.schedule_note }}</p>
+                                    <p class="request-note">Schedule note: {{ item.schedule_note }}</p>
                                 {% endif %}
                             </div>
-                            <div class="request-actions">
-                                <span class="status-pill {{ item.status|lower }}">{{ item.status }}</span>
+                            <div class="request-actions request-card-actions">
+                                <button class="request-toggle js-request-toggle" type="button" aria-expanded="false">
+                                    <span class="toggle-closed">Details</span>
+                                    <span class="toggle-open">Less</span>
+                                    <span class="match-toggle-icon">▾</span>
+                                </button>
                                 {% if item.status == 'Pending' %}
-                                    <form method="post" action="{{ url_for('update_request_status', request_id=item.id) }}">
+                                    <form method="post" action="{{ url_for('update_request_status', request_id=item.id) }}" class="request-decision-row">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                         <button class="button button-dark small-button" type="submit" name="status" value="Accepted">Accept</button>
                                         <button class="button button-light small-button" type="submit" name="status" value="Rejected">Reject</button>
                                     </form>
-                                    <form method="post" action="{{ url_for('counter_request', request_id=item.id) }}" class="counter-form">
+                                    <form method="post" action="{{ url_for('counter_request', request_id=item.id) }}" class="counter-form request-counter-form">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                         <input type="datetime-local" name="proposed_time" value="{{ item.proposed_time }}">
                                         <select name="duration_minutes">
@@ -43,6 +62,9 @@
                                     </form>
                                 {% endif %}
                             </div>
+                            <div class="request-details-panel is-collapsed">
+                                {{ public_profile_details(item.partner_profile) }}
+                            </div>
                         </div>
                     {% else %}
                         <div class="empty-state">No requests received yet.</div>
@@ -50,29 +72,50 @@
                 </div>
             </article>
 
-            <article class="surface-card">
-                <h2>Sent Requests</h2>
-                <div class="list-stack">
+            <article class="surface-card requests-panel">
+                <div class="card-title-row requests-panel-head">
+                    <div>
+                        <h2>Sent Requests</h2>
+                        <p>See whether your proposals are still pending, accepted, countered, or declined.</p>
+                    </div>
+                    <span class="status-pill light">{{ sent|length }} active</span>
+                </div>
+                <div class="list-stack requests-stack">
                     {% for item in sent %}
-                        <div class="request-line">
-                            <div>
-                                <strong>{{ item.receiver_name }}</strong>
-                                <span>Offer {{ item.offer_skill }} · Want {{ item.request_skill }}</span>
-                                <p>{{ item.message or 'No message provided.' }}</p>
-                                <p>Proposed: {{ item.proposed_time or 'No time proposed yet' }} · {{ item.duration_minutes }} min</p>
+                        <div class="request-line request-card">
+                            <div class="request-card-copy">
+                                <div class="request-card-head">
+                                    <div>
+                                        <strong>{{ item.receiver_name }}</strong>
+                                        <span>Offer {{ item.offer_skill }} · Want {{ item.request_skill }}</span>
+                                    </div>
+                                    <span class="status-pill {{ item.status|lower }}">{{ item.status }}</span>
+                                </div>
+                                <p class="request-card-message">{{ item.message or 'No message provided.' }}</p>
+                                <div class="request-meta-row">
+                                    <span class="request-meta-chip">Proposed {{ item.proposed_time or 'No time proposed yet' }}</span>
+                                    <span class="request-meta-chip">{{ item.duration_minutes }} min</span>
+                                </div>
                                 {% if item.schedule_note %}
-                                    <p>Schedule note: {{ item.schedule_note }}</p>
+                                    <p class="request-note">Schedule note: {{ item.schedule_note }}</p>
                                 {% endif %}
                             </div>
-                            <div class="request-actions">
-                                <span class="status-pill {{ item.status|lower }}">{{ item.status }}</span>
+                            <div class="request-actions request-card-actions">
+                                <button class="request-toggle js-request-toggle" type="button" aria-expanded="false">
+                                    <span class="toggle-closed">Details</span>
+                                    <span class="toggle-open">Less</span>
+                                    <span class="match-toggle-icon">▾</span>
+                                </button>
                                 {% if item.status == 'Countered' %}
-                                    <form method="post" action="{{ url_for('update_request_status', request_id=item.id) }}">
+                                    <form method="post" action="{{ url_for('update_request_status', request_id=item.id) }}" class="request-decision-row">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                         <button class="button button-dark small-button" type="submit" name="status" value="Accepted">Accept Counter</button>
                                         <button class="button button-light small-button" type="submit" name="status" value="Rejected">Reject</button>
                                     </form>
                                 {% endif %}
+                            </div>
+                            <div class="request-details-panel is-collapsed">
+                                {{ public_profile_details(item.partner_profile) }}
                             </div>
                         </div>
                     {% else %}
@@ -82,8 +125,13 @@
             </article>
         </div>
 
-        <article class="surface-card">
-            <h2>Leave Feedback</h2>
+        <article class="surface-card requests-panel requests-review-panel">
+            <div class="card-title-row requests-panel-head">
+                <div>
+                    <h2>Leave Feedback</h2>
+                    <p>Close the loop after an accepted exchange and help future members trust the match.</p>
+                </div>
+            </div>
             <div class="review-form-stack">
                 {% for item in reviewable %}
                     <form method="post" action="{{ url_for('add_review', request_id=item.id) }}" class="review-form-card">
@@ -110,4 +158,17 @@
         </article>
     </div>
 </section>
+<script>
+document.querySelectorAll(".js-request-toggle").forEach((toggleButton) => {
+    toggleButton.addEventListener("click", () => {
+        const card = toggleButton.closest(".request-card");
+        const panel = card?.querySelector(".request-details-panel");
+        if (!panel) return;
+        const isCollapsed = panel.classList.contains("is-collapsed");
+        panel.classList.toggle("is-collapsed", !isCollapsed);
+        card?.classList.toggle("is-expanded", isCollapsed);
+        toggleButton.setAttribute("aria-expanded", isCollapsed ? "true" : "false");
+    });
+});
+</script>
 {% endblock %}

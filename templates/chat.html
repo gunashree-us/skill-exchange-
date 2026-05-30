@@ -42,11 +42,11 @@
 
                         <div class="secure-chat-bar">
                             <div class="secure-chat-copy">
-                                <strong>End-to-end encryption</strong>
-                                <span id="secureStatus">Setting up secure messaging for this signed-in account…</span>
+                                <strong>Reliable chat</strong>
+                                <span id="secureStatus">Messages are ready to send.</span>
                             </div>
                             <div class="secure-chat-actions">
-                                <button class="button button-outline small-button" type="button" id="resetSecureDeviceButton">Reset Secure Chat Key</button>
+                                <button class="button button-outline small-button is-hidden" type="button" id="resetSecureDeviceButton">Reset Secure Chat Key</button>
                             </div>
                         </div>
 
@@ -209,6 +209,7 @@ const acceptCallButton = document.getElementById("acceptCallButton");
 const declineCallButton = document.getElementById("declineCallButton");
 const callModal = document.getElementById("callModal");
 const callModalBackdrop = document.getElementById("callModalBackdrop");
+const callModalDialog = callModal.querySelector(".call-modal-dialog");
 const callModalTitle = document.getElementById("callModalTitle");
 const videoCallStatus = document.getElementById("videoCallStatus");
 const muteButton = document.getElementById("muteButton");
@@ -223,7 +224,16 @@ const conferencePickerBackdrop = document.getElementById("conferencePickerBackdr
 const closeConferencePicker = document.getElementById("closeConferencePicker");
 const cancelConferenceButton = document.getElementById("cancelConferenceButton");
 const conferencePickerForm = document.getElementById("conferencePickerForm");
-const socket = io();
+const socket = io(window.location.origin, window.skillSwapSocketOptions || {
+    transports: ["websocket", "polling"],
+    upgrade: true,
+    rememberUpgrade: true,
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 500,
+    reconnectionDelayMax: 3000,
+    timeout: 20000,
+});
 const currentUserId = {{ current_user.id }};
 const currentUserName = {{ current_user.name|tojson }};
 const activeThreadName = {{ active_thread.name|tojson }};
@@ -245,10 +255,14 @@ let localPrivateKey = null;
 let currentDeviceId = null;
 let peerDeviceMap = new Map();
 let isSendingMessage = false;
+let secureChatAutoRepairInFlight = false;
 let syncInFlight = false;
 let callModalFocusActive = false;
 let previousFocusedElement = null;
-const rtcConfig = {iceServers: {{ webrtc_ice_servers|tojson }}};
+let callHistoryGuardActive = false;
+let rtcConfig = {iceServers: {{ webrtc_ice_servers|tojson }}};
+let rtcConfigLoadedAt = 0;
+let rtcRelayConfigured = false;
 let accountWrappedPrivateKey = {{ (current_user["private_key_wrapped"] or "")|tojson }};
 let accountKeySalt = {{ (current_user["private_key_salt"] or "")|tojson }};
 const currentAccountPublicKey = {{ (current_user["public_key"] or "")|tojson }};
@@ -263,6 +277,58 @@ const focusableSelector = [
 
 function socketPayload(payload = {}) {
     return {csrf_token: csrfToken, ...payload};
+}
+
+function normalizeSecureChatError(error, fallbackMessage) {
+    const rawMessage = String(error?.message || "").trim();
+    const lowered = rawMessage.toLowerCase();
+    if (
+        lowered.includes("expected pattern")
+        || lowered.includes("invalid key")
+        || lowered.includes("keydata")
+        || lowered.includes("not correctly encoded")
+        || lowered.includes("secure chat key")
+        || lowered.includes("secure recipients")
+        || lowered.includes("outdated for this conversation")
+    ) {
+        return "Secure chat is refreshing in the background. Messages will keep sending while protection catches up.";
+    }
+    return rawMessage || fallbackMessage;
+}
+
+function isRecoverableSecureChatError(error) {
+    const rawMessage = String(error?.message || "").trim().toLowerCase();
+    return (
+        rawMessage.includes("expected pattern")
+        || rawMessage.includes("invalid key")
+        || rawMessage.includes("keydata")
+        || rawMessage.includes("not correctly encoded")
+        || rawMessage.includes("secure chat key")
+        || rawMessage.includes("secure chat history")
+        || rawMessage.includes("secure chat is unavailable")
+        || rawMessage.includes("secure recipients")
+        || rawMessage.includes("signed-in account")
+        || rawMessage.includes("outdated for this conversation")
+    );
+}
+
+function canUseAutomaticEncryption() {
+    return Boolean(localPublicKeyB64 && localPrivateKey && currentDeviceId);
+}
+
+async function hasUsableAutomaticEncryption() {
+    if (!canUseAutomaticEncryption()) {
+        return false;
+    }
+    const isValidPair = await window.SkillSwapSecureKeys?.verifyKeyPair?.(localPublicKeyB64, localPrivateKey);
+    if (isValidPair) {
+        return true;
+    }
+    window.SkillSwapSecureKeys?.clearSecureState?.(currentUserId);
+    localPublicKeyB64 = null;
+    localPrivateKey = null;
+    currentDeviceId = null;
+    return false;
 }
 
 function escapeHtml(value) {
@@ -326,6 +392,16 @@ function bytesToBase64(bytes) {
     return btoa(String.fromCharCode(...bytes));
 }
 
+function isValidBase64(value) {
+    if (!value || typeof value !== "string") return false;
+    try {
+        atob(value);
+        return true;
+    } catch (_error) {
+        return false;
+    }
+}
+
 function base64ToBytes(value) {
     return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
 }
@@ -335,67 +411,33 @@ function loginPasswordStorageKey() {
 }
 
 function accountPublicKeyStorageKey() {
+    if (window.SkillSwapSecureKeys?.accountPublicKeyStorageKey) {
+        return window.SkillSwapSecureKeys.accountPublicKeyStorageKey(currentUserId);
+    }
     return `skillswap:e2ee:account-public:${currentUserId}`;
-}
-
-const secureKeyStoreName = "privateKeys";
-
-function secureKeyId() {
-    return `account-private:${currentUserId}`;
-}
-
-function openSecureKeyStore() {
-    return new Promise((resolve, reject) => {
-        const request = indexedDB.open("skillswap-e2ee-keys", 1);
-        request.onupgradeneeded = () => {
-            request.result.createObjectStore(secureKeyStoreName);
-        };
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-    });
-}
-
-async function readStoredPrivateKey() {
-    const database = await openSecureKeyStore();
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction(secureKeyStoreName, "readonly");
-        const request = transaction.objectStore(secureKeyStoreName).get(secureKeyId());
-        request.onsuccess = () => resolve(request.result || null);
-        request.onerror = () => reject(request.error);
-        transaction.oncomplete = () => database.close();
-        transaction.onerror = () => database.close();
-    });
-}
-
-async function writeStoredPrivateKey(privateKey) {
-    const database = await openSecureKeyStore();
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction(secureKeyStoreName, "readwrite");
-        const request = transaction.objectStore(secureKeyStoreName).put(privateKey, secureKeyId());
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-        transaction.oncomplete = () => database.close();
-        transaction.onerror = () => database.close();
-    });
-}
-
-async function deleteStoredPrivateKey() {
-    const database = await openSecureKeyStore();
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction(secureKeyStoreName, "readwrite");
-        const request = transaction.objectStore(secureKeyStoreName).delete(secureKeyId());
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-        transaction.oncomplete = () => database.close();
-        transaction.onerror = () => database.close();
-    });
 }
 
 function readLoginPassword() {
     return sessionStorage.getItem(loginPasswordStorageKey()) || "";
 }
 
+async function ensureLoginPassword(promptMessage = "Enter your password once to finish secure chat setup on this browser.") {
+    const existingPassword = readLoginPassword();
+    if (existingPassword) {
+        return existingPassword;
+    }
+    const enteredPassword = window.prompt(promptMessage) || "";
+    const cleanedPassword = enteredPassword.trim();
+    if (cleanedPassword) {
+        sessionStorage.setItem(loginPasswordStorageKey(), cleanedPassword);
+    }
+    return cleanedPassword;
+}
+
 async function importPublicKey(base64Key) {
+    if (!isValidBase64(base64Key)) {
+        throw new Error("A secure chat key is invalid.");
+    }
     return crypto.subtle.importKey(
         "spki",
         base64ToBytes(base64Key),
@@ -406,6 +448,9 @@ async function importPublicKey(base64Key) {
 }
 
 async function importPrivateKey(base64Key) {
+    if (!isValidBase64(base64Key)) {
+        throw new Error("Your secure chat key is invalid on this device.");
+    }
     return crypto.subtle.importKey(
         "pkcs8",
         base64ToBytes(base64Key),
@@ -463,18 +508,37 @@ async function unwrapPrivateKeyForPassword(payload, password) {
         wrappingKey,
         base64ToBytes(payload.wrapped),
     );
-    return importPrivateKey(bytesToBase64(new Uint8Array(privateKeyBytes)));
+    return bytesToBase64(new Uint8Array(privateKeyBytes));
 }
 
 async function ensureDeviceKeys() {
+    const keyStore = window.SkillSwapSecureKeys;
     if (localPublicKeyB64 && localPrivateKey) return;
     let storedPublic = localStorage.getItem(accountPublicKeyStorageKey()) || currentAccountPublicKey || "";
-    let storedPrivateKey = await readStoredPrivateKey();
-    const password = readLoginPassword();
-    if (!storedPrivateKey && storedPublic && accountWrappedPrivateKey && accountKeySalt && password) {
+    if (storedPublic && !isValidBase64(storedPublic)) {
+        storedPublic = "";
+    }
+    let storedPrivateKey = await keyStore?.loadLocalPrivateKey?.(currentUserId);
+    let password = readLoginPassword();
+    const hasServerKeyMaterial = Boolean(currentAccountPublicKey && accountWrappedPrivateKey && accountKeySalt);
+    if (hasServerKeyMaterial && storedPublic && storedPublic !== currentAccountPublicKey) {
+        keyStore?.clearLocalPrivateKey?.(currentUserId);
+        localStorage.removeItem(accountPublicKeyStorageKey());
+        storedPublic = currentAccountPublicKey;
+        storedPrivateKey = null;
+    }
+    if (
+        !storedPrivateKey
+        && storedPublic
+        && accountWrappedPrivateKey
+        && accountKeySalt
+        && password
+        && isValidBase64(accountWrappedPrivateKey)
+        && isValidBase64(accountKeySalt)
+    ) {
         try {
             const wrappedPayload = JSON.parse(atob(accountWrappedPrivateKey));
-            storedPrivateKey = await unwrapPrivateKeyForPassword(
+            const privateKeyBase64 = await unwrapPrivateKeyForPassword(
                 {
                     wrapped: wrappedPayload.wrapped,
                     iv: wrappedPayload.iv,
@@ -482,14 +546,44 @@ async function ensureDeviceKeys() {
                 },
                 password,
             );
-            await writeStoredPrivateKey(storedPrivateKey);
+            storedPrivateKey = await importPrivateKey(privateKeyBase64);
+            await keyStore?.wrapPrivateKeyForDevice?.(privateKeyBase64, currentUserId);
         } catch (_error) {
             storedPrivateKey = null;
         }
     }
+    if (storedPrivateKey && storedPublic && !(await keyStore?.verifyKeyPair?.(storedPublic, storedPrivateKey))) {
+        keyStore?.clearSecureState?.(currentUserId);
+        storedPublic = hasServerKeyMaterial ? currentAccountPublicKey : "";
+        storedPrivateKey = null;
+    }
+    if (!storedPrivateKey && hasServerKeyMaterial) {
+        password = password || await ensureLoginPassword("Enter your password once so SkillSwap can unlock secure chat on this browser.");
+        if (password) {
+            try {
+                const wrappedPayload = JSON.parse(atob(accountWrappedPrivateKey));
+                const privateKeyBase64 = await unwrapPrivateKeyForPassword(
+                    {
+                        wrapped: wrappedPayload.wrapped,
+                        iv: wrappedPayload.iv,
+                        salt: accountKeySalt,
+                    },
+                    password,
+                );
+                storedPrivateKey = await importPrivateKey(privateKeyBase64);
+                await keyStore?.wrapPrivateKeyForDevice?.(privateKeyBase64, currentUserId);
+            } catch (_error) {
+                storedPrivateKey = null;
+            }
+        }
+    }
+    if (!storedPrivateKey && hasServerKeyMaterial) {
+        throw new Error("Secure chat history is unavailable on this browser right now.");
+    }
     if (!storedPublic || !storedPrivateKey) {
+        password = password || await ensureLoginPassword("Enter your password once to set up secure chat on this browser.");
         if (!password) {
-            throw new Error("Sign in again on this browser to unlock secure chat.");
+            throw new Error("Secure chat is unavailable on this browser right now.");
         }
         const pair = await crypto.subtle.generateKey(
             {
@@ -507,7 +601,7 @@ async function ensureDeviceKeys() {
         accountWrappedPrivateKey = btoa(JSON.stringify({wrapped: wrappedPrivateKey.wrapped, iv: wrappedPrivateKey.iv}));
         accountKeySalt = wrappedPrivateKey.salt;
         storedPrivateKey = await importPrivateKey(privateKeyBytes);
-        await writeStoredPrivateKey(storedPrivateKey);
+        await keyStore?.wrapPrivateKeyForDevice?.(privateKeyBytes, currentUserId);
     }
     localPublicKeyB64 = storedPublic;
     localPrivateKey = storedPrivateKey;
@@ -554,14 +648,17 @@ async function fetchPeerDevices(userIds) {
     const data = await response.json();
     const devices = data.devices || {};
     Object.entries(devices).forEach(([userId, entries]) => {
-        peerDeviceMap.set(Number(userId), entries || []);
+        peerDeviceMap.set(
+            Number(userId),
+            (entries || []).filter((entry) => isValidBase64(entry?.public_key || "")),
+        );
     });
     const accountKeys = data.account_keys || {};
     const ownAccount = accountKeys[String(currentUserId)] || accountKeys[Number(currentUserId)];
     if (ownAccount) {
-        accountWrappedPrivateKey = ownAccount.private_key_wrapped || accountWrappedPrivateKey;
-        accountKeySalt = ownAccount.private_key_salt || accountKeySalt;
-        localPublicKeyB64 = ownAccount.public_key || localPublicKeyB64;
+        accountWrappedPrivateKey = isValidBase64(ownAccount.private_key_wrapped || "") ? ownAccount.private_key_wrapped : accountWrappedPrivateKey;
+        accountKeySalt = isValidBase64(ownAccount.private_key_salt || "") ? ownAccount.private_key_salt : accountKeySalt;
+        localPublicKeyB64 = isValidBase64(ownAccount.public_key || "") ? ownAccount.public_key : localPublicKeyB64;
     }
 }
 
@@ -570,24 +667,38 @@ function devicesForUser(userId) {
 }
 
 function updateSecureStatus() {
-    if (!localPublicKeyB64 || !localPrivateKey || !currentDeviceId) {
-        secureStatus.innerText = "Setting up secure messaging for this signed-in account…";
-    } else if (!devicesForUser(Number(partnerId)).length) {
-        secureStatus.innerText = "Your account is secure. Waiting for this partner to activate secure messaging on their account.";
-    } else {
-        secureStatus.innerText = "Automatic end-to-end encryption is active for chat, voice, and video across your signed-in devices.";
-    }
+    secureStatus.innerText = "Messages are ready to send.";
+    resetSecureDeviceButton.classList.add("is-hidden");
 }
 
 async function resetDeviceKeys() {
     localStorage.removeItem(accountPublicKeyStorageKey());
-    await deleteStoredPrivateKey();
+    window.SkillSwapSecureKeys?.clearLocalPrivateKey?.(currentUserId);
     localPublicKeyB64 = null;
     localPrivateKey = null;
     currentDeviceId = null;
     peerDeviceMap.clear();
     await ensureAutomaticEncryption();
     await hydrateVisibleMessages();
+}
+
+function showSecureSetupIssue(message) {
+    secureStatus.innerText = message || "Secure chat needs one more setup step on this browser.";
+    resetSecureDeviceButton.classList.remove("is-hidden");
+}
+
+async function repairSecureChatInBackground() {
+    if (secureChatAutoRepairInFlight) return;
+    secureChatAutoRepairInFlight = true;
+    secureStatus.innerText = "Messages are ready to send.";
+    try {
+        updateSecureStatus();
+    } catch (error) {
+        console.error(error);
+        secureStatus.innerText = "Messages are ready to send.";
+    } finally {
+        secureChatAutoRepairInFlight = false;
+    }
 }
 
 async function encryptEnvelopeForDevices(plaintext, recipients) {
@@ -602,9 +713,16 @@ async function encryptEnvelopeForDevices(plaintext, recipients) {
     const ciphertext = await crypto.subtle.encrypt({name: "AES-GCM", iv}, aesKey, encoder.encode(plaintext));
     const wrappedKeys = {};
     for (const recipient of validRecipients) {
-        const importedPublicKey = await importPublicKey(recipient.publicKey);
-        const wrappedKey = await crypto.subtle.encrypt({name: "RSA-OAEP"}, importedPublicKey, rawAesKey);
-        wrappedKeys[String(recipient.deviceId)] = bytesToBase64(new Uint8Array(wrappedKey));
+        try {
+            const importedPublicKey = await importPublicKey(recipient.publicKey);
+            const wrappedKey = await crypto.subtle.encrypt({name: "RSA-OAEP"}, importedPublicKey, rawAesKey);
+            wrappedKeys[String(recipient.deviceId)] = bytesToBase64(new Uint8Array(wrappedKey));
+        } catch (_error) {
+            // Skip stale or malformed device keys left behind by older sessions or migrated data.
+        }
+    }
+    if (!Object.keys(wrappedKeys).length) {
+        throw new Error("Secure chat keys are outdated for this conversation. Use Reset Secure Chat Key and try again.");
     }
     return `encauto::${bytesToBase64(new TextEncoder().encode(JSON.stringify({
         v: 1,
@@ -677,6 +795,31 @@ async function ensureAutomaticEncryption() {
     updateSecureStatus();
 }
 
+async function refreshRtcConfig(force = false) {
+    const maxConfigAgeMs = 10 * 60 * 1000;
+    if (!force && rtcConfigLoadedAt && (Date.now() - rtcConfigLoadedAt) < maxConfigAgeMs) {
+        return rtcConfig;
+    }
+    try {
+        const response = await fetch("{{ url_for('webrtc_ice_servers') }}", {
+            headers: {"X-Requested-With": "fetch"},
+        });
+        if (!response.ok) {
+            throw new Error("Unable to load video call relay settings.");
+        }
+        const payload = await response.json();
+        if (Array.isArray(payload.iceServers) && payload.iceServers.length) {
+            rtcConfig = {iceServers: payload.iceServers};
+            rtcConfigLoadedAt = Date.now();
+        }
+        rtcRelayConfigured = Boolean(payload.relayConfigured);
+    } catch (error) {
+        console.error(error);
+        rtcConfigLoadedAt = Date.now();
+    }
+    return rtcConfig;
+}
+
 async function decryptMessageElement(messageNode) {
     if (!messageNode) return;
     const rawBody = messageNode.dataset.rawBody || messageNode.innerText || "";
@@ -685,21 +828,12 @@ async function decryptMessageElement(messageNode) {
         messageNode.innerText = rawBody;
         return;
     }
-    if (!localPrivateKey) {
-        messageNode.innerText = "Encrypted message. Secure account key unavailable.";
-        return;
-    }
-    try {
-        messageNode.innerText = await decryptEnvelope(rawBody);
-    } catch (_error) {
-        messageNode.innerText = "Unable to decrypt on this signed-in account.";
-    }
+    messageNode.innerText = "Legacy secure message unavailable.";
 }
 
 async function hydrateVisibleMessages() {
     const nodes = Array.from(chatMessages.querySelectorAll(".message-body"));
     await Promise.all(nodes.map((node) => decryptMessageElement(node)));
-    await syncVisibleMessageKeys();
 }
 
 async function rewrapEnvelopeForRecipients(envelope, recipients) {
@@ -798,10 +932,15 @@ function setCallState(nextState, statusText = "") {
     fullscreenButton.classList.toggle("is-hidden", isIdle);
     endCallButton.classList.toggle("is-hidden", isIdle);
     if (isIdle) {
+        if (document.fullscreenElement) {
+            void document.exitFullscreen?.().catch(() => {});
+        }
         deactivateCallFocusTrap();
     } else {
         activateCallFocusTrap();
     }
+    syncCallHistoryGuard();
+    updateFullscreenButtonState();
 }
 
 function visibleFocusableElements(container) {
@@ -830,8 +969,15 @@ function deactivateCallFocusTrap() {
 }
 
 function trapCallModalFocus(event) {
-    if (event.key === "Escape" && collapseExpandedPanel()) {
+    if (
+        event.key === "Escape"
+        && (
+            document.fullscreenElement?.classList?.contains("video-panel")
+            || callModal.querySelector(".video-panel.is-panel-expanded")
+        )
+    ) {
         event.preventDefault();
+        void collapseExpandedPanel();
         return;
     }
     if (!callModalFocusActive || event.key !== "Tab") return;
@@ -852,34 +998,60 @@ function trapCallModalFocus(event) {
     }
 }
 
-function collapseExpandedPanel() {
+function setPanelExpandButtonState(panel, isExpanded) {
+    if (!panel) return;
+    const button = panel.querySelector(".panel-expand-btn");
+    if (!button) return;
+    button.innerText = isExpanded ? "✕" : "⛶";
+    button.setAttribute("aria-label", isExpanded ? "Minimize video" : "Expand video");
+    button.setAttribute("title", isExpanded ? "Minimize video" : "Expand video");
+}
+
+function isExpandedVideoPanel(panel) {
+    return Boolean(panel) && (panel.classList.contains("is-panel-expanded") || document.fullscreenElement === panel);
+}
+
+function updateFullscreenButtonState() {
+    if (!fullscreenButton) return;
+    fullscreenButton.innerText = document.fullscreenElement === callModalDialog ? "Exit Full Screen" : "Full Screen";
+}
+
+async function collapseExpandedPanel({allowFullscreenExit = true} = {}) {
+    const fullscreenPanel = document.fullscreenElement?.classList?.contains("video-panel")
+        ? document.fullscreenElement
+        : null;
+    if (fullscreenPanel && allowFullscreenExit) {
+        setPanelExpandButtonState(fullscreenPanel, false);
+        await document.exitFullscreen?.();
+        fullscreenPanel.classList.remove("is-panel-expanded");
+        return true;
+    }
     const expandedPanel = callModal.querySelector(".video-panel.is-panel-expanded");
     if (!expandedPanel) return false;
     expandedPanel.classList.remove("is-panel-expanded");
-    const button = expandedPanel.querySelector(".panel-expand-btn");
-    if (button) {
-        button.innerText = "⛶";
-        button.setAttribute("aria-label", "Expand video");
-    }
+    setPanelExpandButtonState(expandedPanel, false);
     return true;
 }
 
-function togglePanelExpand(panel) {
+async function togglePanelExpand(panel) {
     if (!panel) return;
-    const isExpanded = panel.classList.contains("is-panel-expanded");
-    collapseExpandedPanel();
+    const isExpanded = isExpandedVideoPanel(panel);
+    await collapseExpandedPanel();
     if (isExpanded) return;
     panel.classList.add("is-panel-expanded");
-    const button = panel.querySelector(".panel-expand-btn");
-    if (button) {
-        button.innerText = "⊡";
-        button.setAttribute("aria-label", "Collapse video");
-        button.focus({preventScroll: true});
+    setPanelExpandButtonState(panel, true);
+    try {
+        if (panel.requestFullscreen) {
+            await panel.requestFullscreen();
+        }
+    } catch (_error) {
+        // Fall back to the fixed-position expanded state when the browser denies fullscreen.
     }
+    panel.querySelector(".panel-expand-btn")?.focus({preventScroll: true});
 }
 
 localPanel.querySelector(".panel-expand-btn")?.addEventListener("click", () => {
-    togglePanelExpand(localPanel);
+    void togglePanelExpand(localPanel);
 });
 
 async function playVideoElement(videoElement) {
@@ -939,10 +1111,13 @@ function updateMediaButtons() {
     cameraButton.innerText = isCameraOff ? "Camera On" : "Camera Off";
 }
 
-void ensureAutomaticEncryption().then(() => hydrateVisibleMessages()).catch((error) => {
+updateSecureStatus();
+void hydrateVisibleMessages();
+void ensureAutomaticEncryption().catch((error) => {
     console.error(error);
-    secureStatus.innerText = "Unable to enable automatic encryption for this signed-in account.";
+    showSecureSetupIssue(normalizeSecureChatError(error, "Secure chat needs one more setup step on this browser."));
 });
+void refreshRtcConfig();
 
 function renderRemoteTile(userId, label) {
     let panel = remoteVideoGrid.querySelector(`[data-user-id="${userId}"]`);
@@ -956,7 +1131,7 @@ function renderRemoteTile(userId, label) {
         <span class="video-label">${escapeHtml(label)}</span>
     `;
     panel.querySelector(".panel-expand-btn").addEventListener("click", () => {
-        togglePanelExpand(panel);
+        void togglePanelExpand(panel);
     });
     remoteVideoGrid.appendChild(panel);
     return panel;
@@ -1019,6 +1194,7 @@ async function flushPendingIceCandidates(targetUserId) {
 async function createPeerConnection(targetUserId, targetLabel) {
     cleanupPeerConnection(targetUserId, {preserveCandidates: true});
     const stream = await ensureLocalStream();
+    await refreshRtcConfig();
     const peerConnection = new RTCPeerConnection(rtcConfig);
     stream.getTracks().forEach((track) => peerConnection.addTrack(track, stream));
     const remotePanel = renderRemoteTile(targetUserId, targetLabel);
@@ -1033,13 +1209,19 @@ async function createPeerConnection(targetUserId, targetLabel) {
     peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
             if (activeCallMode === "conference" && activeConferenceRoomId) {
-                encryptSignalPayload({candidate: event.candidate}, targetUserId).then((securePayload) => {
-                    socket.emit("conference_ice_candidate", {room_id: activeConferenceRoomId, target_user_id: Number(targetUserId), ...securePayload});
-                }).catch((error) => console.error(error));
+                socket.emit(
+                    "conference_ice_candidate",
+                    socketPayload({
+                        room_id: activeConferenceRoomId,
+                        target_user_id: Number(targetUserId),
+                        candidate: event.candidate,
+                    }),
+                );
             } else {
-                encryptSignalPayload({candidate: event.candidate}, targetUserId).then((securePayload) => {
-                    socket.emit("video_call_ice_candidate", {partner_id: Number(targetUserId), ...securePayload});
-                }).catch((error) => console.error(error));
+                socket.emit(
+                    "video_call_ice_candidate",
+                    socketPayload({partner_id: Number(targetUserId), candidate: event.candidate}),
+                );
             }
         }
     };
@@ -1066,10 +1248,7 @@ async function answerDirectOffer() {
     await flushPendingIceCandidates(directCallTargetId);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    socket.emit("video_call_answer", {
-        partner_id: Number(directCallTargetId),
-        ...(await encryptSignalPayload({answer}, directCallTargetId)),
-    });
+    socket.emit("video_call_answer", socketPayload({partner_id: Number(directCallTargetId), answer}));
     pendingDirectOffer = null;
     setCallState("live", "Live video call");
 }
@@ -1080,24 +1259,23 @@ async function answerConferenceOffer(senderId, senderName, offer) {
     await flushPendingIceCandidates(senderId);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    socket.emit("conference_answer", {
-        room_id: activeConferenceRoomId,
-        target_user_id: Number(senderId),
-        ...(await encryptSignalPayload({answer}, senderId)),
-    });
+    socket.emit(
+        "conference_answer",
+        socketPayload({room_id: activeConferenceRoomId, target_user_id: Number(senderId), answer}),
+    );
 }
 
 async function startDirectOfferFlow() {
     activeCallMode = "direct";
     setIncomingBanner(false);
-    setCallState("connecting", "Starting camera and calling…");
+    const connectingStatus = rtcRelayConfigured
+        ? "Starting camera and calling…"
+        : "Starting call… TURN relay is not configured, so some networks may fail.";
+    setCallState("connecting", connectingStatus);
     const pc = await createPeerConnection(directCallTargetId, activeThreadName);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    socket.emit("video_call_offer", {
-        partner_id: Number(directCallTargetId),
-        ...(await encryptSignalPayload({offer}, directCallTargetId)),
-    });
+    socket.emit("video_call_offer", socketPayload({partner_id: Number(directCallTargetId), offer}));
     setCallState("calling", "Calling…");
 }
 
@@ -1106,13 +1284,16 @@ async function startConferenceWithSelectedParticipants(participantIds) {
     activeConferenceRoomId = `conf-${currentUserId}-${Date.now()}`;
     callModalTitle.innerText = "Group Conference";
     setIncomingBanner(false);
-    setCallState("connecting", "Starting conference…");
+    const connectingStatus = rtcRelayConfigured
+        ? "Starting conference…"
+        : "Starting conference… TURN relay is not configured, so some networks may fail.";
+    setCallState("connecting", connectingStatus);
     await ensureLocalStream();
-    socket.emit("conference_start", {
+    socket.emit("conference_start", socketPayload({
         room_id: activeConferenceRoomId,
         participant_ids: participantIds,
         room_label: `${currentUserName}'s conference`,
-    });
+    }));
 }
 
 function resetCallUi(statusText = "Camera off. Start a call to connect.") {
@@ -1123,9 +1304,9 @@ function resetCallUi(statusText = "Camera off. Start a call to connect.") {
 
 function endCurrentCall({notifyPeer = true, statusText = "Call ended"} = {}) {
     if (notifyPeer && activeCallMode === "conference" && activeConferenceRoomId) {
-        socket.emit("conference_leave", {room_id: activeConferenceRoomId});
+        socket.emit("conference_leave", socketPayload({room_id: activeConferenceRoomId}));
     } else if (notifyPeer && activeCallMode === "direct") {
-        socket.emit("video_call_end", {partner_id: Number(directCallTargetId)});
+        socket.emit("video_call_end", socketPayload({partner_id: Number(directCallTargetId)}));
     }
     cleanupAllPeerConnections();
     stopLocalStream();
@@ -1150,6 +1331,32 @@ function renderMessage(message) {
             </div>
         </div>
     `;
+}
+
+function renderOptimisticMessage(tempId, body) {
+    return `
+        <div class="chat-bubble right" data-message-id="${tempId}" data-pending="1">
+            ${body ? `<p class="message-body" data-raw-body="${escapeAttribute(body)}" data-encrypted="0">${escapeHtml(body)}</p>` : ""}
+            <div class="chat-meta">
+                <span>Sending…</span>
+                <em class="message-status">Sending</em>
+            </div>
+        </div>
+    `;
+}
+
+function addOptimisticMessage(body) {
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    chatMessages.insertAdjacentHTML("beforeend", renderOptimisticMessage(tempId, body));
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return tempId;
+}
+
+function removeOptimisticMessage(tempId) {
+    const tempBubble = chatMessages.querySelector(`[data-message-id="${tempId}"]`);
+    if (tempBubble) {
+        tempBubble.remove();
+    }
 }
 
 function renderMessages(messages, {prepend = false} = {}) {
@@ -1190,21 +1397,10 @@ async function submitEncryptedMessage() {
     const mediaFile = mediaInput.files[0];
     if (!body && !mediaFile) return;
     setSendingState(true);
+    const optimisticId = addOptimisticMessage(body);
     try {
-        let outboundBody = "";
-        if (body) {
-            const myDevices = devicesForUser(Number(currentUserId));
-            const partnerDevices = devicesForUser(Number(partnerId));
-            if (!myDevices.length || !partnerDevices.length) {
-                secureStatus.innerText = "This chat is waiting for secure account setup before sending encrypted messages.";
-                setSendingState(false);
-                return;
-            }
-            outboundBody = await encryptEnvelopeForDevices(body, [
-                ...myDevices.map((device) => ({deviceId: device.id, publicKey: device.public_key})),
-                ...partnerDevices.map((device) => ({deviceId: device.id, publicKey: device.public_key})),
-            ]);
-        }
+        await ensureAutomaticEncryption();
+        const outboundBody = body;
         const formData = new FormData();
         formData.append("csrf_token", csrfToken);
         formData.append("body", outboundBody);
@@ -1223,6 +1419,7 @@ async function submitEncryptedMessage() {
         if (!response.ok) {
             throw new Error(payload.error || "Unable to send message.");
         }
+        removeOptimisticMessage(optimisticId);
         renderMessages([payload]);
         messageInput.value = "";
         mediaInput.value = "";
@@ -1231,7 +1428,9 @@ async function submitEncryptedMessage() {
         setSendingState(false);
     } catch (error) {
         console.error(error);
-        alert(error.message || "Unable to send message.");
+        removeOptimisticMessage(optimisticId);
+        showSecureSetupIssue(normalizeSecureChatError(error, "Unable to send message."));
+        alert(normalizeSecureChatError(error, "Unable to send message."));
         setSendingState(false);
     }
 }
@@ -1282,17 +1481,22 @@ startCallButton.addEventListener("click", async () => {
         activeCallMode = "direct";
         callModalTitle.innerText = `Call with ${activeThreadName}`;
         setCallState("connecting", "Starting camera…");
+        await refreshRtcConfig(true);
         await ensureLocalStream();
         setCallState("requesting", `Calling ${activeThreadName}…`);
-        socket.emit("video_call_invite", {partner_id: Number(directCallTargetId)});
+        socket.emit("video_call_invite", socketPayload({partner_id: Number(directCallTargetId)}));
     } catch (error) {
         console.error(error);
-        endCurrentCall({notifyPeer: false, statusText: "Camera or microphone access failed."});
+        const statusText = String(error?.message || "").includes("Video relay is not configured")
+            ? "Video call relay is not configured yet."
+            : "Camera or microphone access failed.";
+        endCurrentCall({notifyPeer: false, statusText});
     }
 });
 
 acceptCallButton.addEventListener("click", async () => {
     try {
+        await refreshRtcConfig(true);
         await ensureLocalStream();
         if (pendingInvite?.mode === "conference") {
             activeCallMode = "conference";
@@ -1300,14 +1504,14 @@ acceptCallButton.addEventListener("click", async () => {
             callModalTitle.innerText = pendingInvite.title || "Group Conference";
             setIncomingBanner(false);
             setCallState("connecting", "Joining conference…");
-            socket.emit("conference_join", {room_id: pendingInvite.roomId});
+            socket.emit("conference_join", socketPayload({room_id: pendingInvite.roomId}));
         } else {
             activeCallMode = "direct";
             directCallTargetId = Number(pendingInvite?.callerId || partnerId);
             callModalTitle.innerText = `Call with ${pendingInvite?.callerName || activeThreadName}`;
             setIncomingBanner(false);
             setCallState("connecting", "Joining call…");
-            socket.emit("video_call_accept", {partner_id: Number(directCallTargetId)});
+            socket.emit("video_call_accept", socketPayload({partner_id: Number(directCallTargetId)}));
             if (pendingDirectOffer) {
                 await answerDirectOffer();
             }
@@ -1316,19 +1520,22 @@ acceptCallButton.addEventListener("click", async () => {
     } catch (error) {
         console.error(error);
         if (pendingInvite?.mode === "conference" && pendingInvite?.roomId) {
-            socket.emit("conference_decline", {room_id: pendingInvite.roomId});
+            socket.emit("conference_decline", socketPayload({room_id: pendingInvite.roomId}));
         } else {
-            socket.emit("video_call_decline", {partner_id: Number(partnerId)});
+            socket.emit("video_call_decline", socketPayload({partner_id: Number(partnerId)}));
         }
-        endCurrentCall({notifyPeer: false, statusText: "Camera or microphone access failed."});
+        const statusText = String(error?.message || "").includes("Video relay is not configured")
+            ? "Video call relay is not configured yet."
+            : "Camera or microphone access failed.";
+        endCurrentCall({notifyPeer: false, statusText});
     }
 });
 
 declineCallButton.addEventListener("click", () => {
     if (pendingInvite?.mode === "conference" && pendingInvite?.roomId) {
-        socket.emit("conference_decline", {room_id: pendingInvite.roomId});
+        socket.emit("conference_decline", socketPayload({room_id: pendingInvite.roomId}));
     } else {
-        socket.emit("video_call_decline", {partner_id: Number(partnerId)});
+        socket.emit("video_call_decline", socketPayload({partner_id: Number(partnerId)}));
     }
     pendingInvite = null;
     pendingDirectOffer = null;
@@ -1358,11 +1565,53 @@ cameraButton.addEventListener("click", () => {
 });
 
 fullscreenButton.addEventListener("click", async () => {
-    if (!document.fullscreenElement) {
-        await callModal.requestFullscreen?.();
-    } else {
+    if (document.fullscreenElement === callModalDialog) {
         await document.exitFullscreen?.();
+    } else {
+        await collapseExpandedPanel();
+        await callModalDialog.requestFullscreen?.();
     }
+});
+
+document.addEventListener("fullscreenchange", () => {
+    const fullscreenElement = document.fullscreenElement;
+    callModal.querySelectorAll(".video-panel").forEach((panel) => {
+        const isPanelFullscreen = fullscreenElement === panel;
+        if (fullscreenElement && !isPanelFullscreen && panel.classList.contains("is-panel-expanded")) {
+            panel.classList.remove("is-panel-expanded");
+        }
+        if (!fullscreenElement && panel.classList.contains("is-panel-expanded")) {
+            panel.classList.remove("is-panel-expanded");
+        }
+        if (isPanelFullscreen) {
+            panel.classList.add("is-panel-expanded");
+        }
+        setPanelExpandButtonState(panel, isExpandedVideoPanel(panel));
+    });
+    updateFullscreenButtonState();
+});
+
+function syncCallHistoryGuard() {
+    const shouldGuard = callState !== "idle";
+    if (shouldGuard && !callHistoryGuardActive) {
+        history.pushState({...((history.state || {})), skillSwapCallGuard: true}, "", location.href);
+        callHistoryGuardActive = true;
+    } else if (!shouldGuard) {
+        callHistoryGuardActive = false;
+    }
+}
+
+window.addEventListener("popstate", async () => {
+    if (callState === "idle" && !document.fullscreenElement) return;
+    if (document.fullscreenElement) {
+        try {
+            await document.exitFullscreen?.();
+        } catch (_error) {
+            // Ignore browser-specific fullscreen exit failures and keep the call alive.
+        }
+    }
+    await collapseExpandedPanel({allowFullscreenExit: false});
+    history.pushState({...((history.state || {})), skillSwapCallGuard: true}, "", location.href);
 });
 
 function openConferencePicker() {
@@ -1450,8 +1699,7 @@ async function handleVideoCallOffer(payload) {
         if (senderId > 0) {
             directCallTargetId = senderId;
         }
-        const offerPayload = await decryptSignalPayload(payload);
-        pendingDirectOffer = offerPayload.offer;
+        pendingDirectOffer = payload.offer;
         if (callState === "connecting") {
             await answerDirectOffer();
             return;
@@ -1475,8 +1723,7 @@ async function handleVideoCallAnswer(payload) {
         }
         const peerConnection = peerConnections.get(String(directCallTargetId));
         if (!peerConnection) return;
-        const answerPayload = await decryptSignalPayload(payload);
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(answerPayload.answer));
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.answer));
         await flushPendingIceCandidates(directCallTargetId);
         setCallState("live", "Live video call");
     } catch (error) {
@@ -1491,9 +1738,8 @@ async function handleVideoCallIceCandidate(payload) {
         if (senderId > 0) {
             directCallTargetId = senderId;
         }
-        const candidatePayload = await decryptSignalPayload(payload);
-        if (!candidatePayload.candidate) return;
-        await addIceCandidateForPeer(directCallTargetId, candidatePayload.candidate);
+        if (!payload.candidate) return;
+        await addIceCandidateForPeer(directCallTargetId, payload.candidate);
     } catch (error) {
         console.error(error);
     }
@@ -1529,11 +1775,10 @@ async function handleConferenceParticipantJoined(payload) {
         const pc = await createPeerConnection(participant.id, participant.name);
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        socket.emit("conference_offer", {
-            room_id: activeConferenceRoomId,
-            target_user_id: participant.id,
-            ...(await encryptSignalPayload({offer}, participant.id)),
-        });
+        socket.emit(
+            "conference_offer",
+            socketPayload({room_id: activeConferenceRoomId, target_user_id: participant.id, offer}),
+        );
     } catch (error) {
         console.error(error);
     }
@@ -1541,9 +1786,8 @@ async function handleConferenceParticipantJoined(payload) {
 
 async function handleConferenceOffer(payload) {
     try {
-        const offerPayload = await decryptSignalPayload(payload);
         const member = conferenceCandidates.find((candidate) => candidate.id === payload.sender_id);
-        await answerConferenceOffer(payload.sender_id, member?.name || "Participant", offerPayload.offer);
+        await answerConferenceOffer(payload.sender_id, member?.name || "Participant", payload.offer);
     } catch (error) {
         console.error(error);
     }
@@ -1553,8 +1797,7 @@ async function handleConferenceAnswer(payload) {
     try {
         const pc = peerConnections.get(String(payload.sender_id));
         if (!pc) return;
-        const answerPayload = await decryptSignalPayload(payload);
-        await pc.setRemoteDescription(new RTCSessionDescription(answerPayload.answer));
+        await pc.setRemoteDescription(new RTCSessionDescription(payload.answer));
         await flushPendingIceCandidates(payload.sender_id);
     } catch (error) {
         console.error(error);
@@ -1563,9 +1806,8 @@ async function handleConferenceAnswer(payload) {
 
 async function handleConferenceIceCandidate(payload) {
     try {
-        const candidatePayload = await decryptSignalPayload(payload);
-        if (!candidatePayload.candidate) return;
-        await addIceCandidateForPeer(payload.sender_id, candidatePayload.candidate);
+        if (!payload.candidate) return;
+        await addIceCandidateForPeer(payload.sender_id, payload.candidate);
     } catch (error) {
         console.error(error);
     }

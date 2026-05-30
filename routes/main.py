@@ -97,6 +97,19 @@ def dashboard():
         """,
         (g.user["id"],),
     )
+    sent_requests = query_db(
+        """
+        SELECT er.id, u.name AS receiver_name, ts.name AS teach_skill, ls.name AS learn_skill, er.status
+        FROM exchange_requests er
+        JOIN users u ON u.id = er.receiver_id
+        JOIN skills ts ON ts.id = er.teach_skill_id
+        JOIN skills ls ON ls.id = er.learn_skill_id
+        WHERE er.sender_id = ?
+        ORDER BY er.created_at DESC
+        LIMIT 5
+        """,
+        (g.user["id"],),
+    )
     rating = query_db(
         "SELECT ROUND(AVG(rating), 1) AS avg_rating, COUNT(*) AS total FROM reviews WHERE reviewee_id = ?",
         (g.user["id"],),
@@ -177,6 +190,7 @@ def dashboard():
         recommendation_feed=recommendation_feed,
         my_teach=my_teach,
         my_learn=my_learn,
+        sent_requests=sent_requests,
         durations=REQUEST_DURATIONS,
         onboarding_steps=onboarding_steps,
         show_onboarding=show_onboarding,

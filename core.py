@@ -1,26 +1,22 @@
 import json
 import os
 import secrets
-import sqlite3
 import hashlib
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from functools import wraps
 from threading import Lock
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from flask import Flask, flash, g, jsonify, redirect, render_template, request, session, url_for
 from flask_socketio import SocketIO, emit, join_room, leave_room
+import psycopg
+from psycopg.rows import dict_row
 from werkzeug.security import check_password_hash, generate_password_hash
-
-try:
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover - local SQLite installs may not have PostgreSQL support yet.
-    psycopg = None
-    dict_row = None
 
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -48,39 +44,31 @@ DEBUG_MODE = os.environ.get("FLASK_DEBUG", "").lower() in {"1", "true", "yes"}
 SECRET_KEY = os.environ.get("SECRET_KEY")
 
 
-def resolve_sqlite_path():
-    # Allow deployments to keep SQLite on a persistent volume outside the app release folder.
-    configured_path = (
-        os.environ.get("DATABASE_PATH")
-        or os.environ.get("SQLITE_PATH")
-        or os.path.join(BASE_DIR, "skill_exchange.db")
-    ).strip()
-    if not os.path.isabs(configured_path):
-        configured_path = os.path.join(BASE_DIR, configured_path)
-    parent_dir = os.path.dirname(configured_path)
-    if parent_dir:
-        os.makedirs(parent_dir, exist_ok=True)
-    return configured_path
+def env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def resolve_database_config():
-    # Prefer a managed database URL in production, but keep SQLite as the local fallback.
+    # Require PostgreSQL everywhere so local and deployed environments behave the same way.
     database_url = (os.environ.get("DATABASE_URL") or "").strip()
-    if database_url:
-        parsed = urlparse(database_url)
-        if parsed.scheme in {"postgres", "postgresql"}:
-            if psycopg is None:
-                raise RuntimeError("PostgreSQL support requires the 'psycopg' package to be installed.")
-            normalized_url = re.sub(r"^postgres://", "postgresql://", database_url, count=1)
-            return {"backend": "postgresql", "dsn": normalized_url}
-    return {"backend": "sqlite", "path": resolve_sqlite_path()}
+    if not database_url:
+        raise RuntimeError(
+            "DATABASE_URL environment variable is required.\n"
+            "Example:\n"
+            "  export DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/skill_exchange"
+        )
+    parsed = urlparse(database_url)
+    if parsed.scheme not in {"postgres", "postgresql"}:
+        raise RuntimeError("DATABASE_URL must use the postgres:// or postgresql:// scheme.")
+    normalized_url = re.sub(r"^postgres://", "postgresql://", database_url, count=1)
+    return {"dsn": normalized_url}
 
 
 DATABASE_CONFIG = resolve_database_config()
-if DATABASE_CONFIG["backend"] == "postgresql" and psycopg is not None:
-    IntegrityError = psycopg.IntegrityError
-else:
-    IntegrityError = sqlite3.IntegrityError
+IntegrityError = psycopg.IntegrityError
 
 if not SECRET_KEY:
     raise RuntimeError(
@@ -93,9 +81,7 @@ if not SECRET_KEY:
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = SECRET_KEY
-app.config["DB_BACKEND"] = DATABASE_CONFIG["backend"]
-app.config["DATABASE"] = DATABASE_CONFIG.get("path") or DATABASE_CONFIG.get("dsn")
-app.config["DATABASE_DSN"] = DATABASE_CONFIG.get("dsn")
+app.config["DATABASE_DSN"] = DATABASE_CONFIG["dsn"]
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -182,13 +168,105 @@ def get_webrtc_ice_servers():
     return [{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}]
 
 
-def is_postgres_backend():
-    return app.config["DB_BACKEND"] == "postgresql"
+def _normalize_ice_servers(ice_servers):
+    normalized_servers = []
+    for server in ice_servers or []:
+        urls = server.get("urls") if isinstance(server, dict) else None
+        if isinstance(urls, str):
+            urls = [urls]
+        filtered_urls = []
+        for url in urls or []:
+            cleaned = str(url).strip()
+            if not cleaned:
+                continue
+            # Cloudflare warns that browser TURN URLs using alternate port 53 can stall ICE gathering.
+            if ":53" in cleaned:
+                continue
+            filtered_urls.append(cleaned)
+        if not filtered_urls:
+            continue
+        payload = {"urls": filtered_urls}
+        if isinstance(server, dict) and server.get("username"):
+            payload["username"] = server["username"]
+        if isinstance(server, dict) and server.get("credential"):
+            payload["credential"] = server["credential"]
+        normalized_servers.append(payload)
+    return normalized_servers
+
+
+def cloudflare_turn_credentials_configured():
+    return bool(os.environ.get("CLOUDFLARE_TURN_KEY_ID") and os.environ.get("CLOUDFLARE_TURN_API_TOKEN"))
+
+
+def get_runtime_webrtc_ice_servers():
+    # Prefer short-lived Cloudflare TURN credentials when configured; otherwise use static ICE config.
+    if not cloudflare_turn_credentials_configured():
+        return get_webrtc_ice_servers()
+
+    turn_key_id = os.environ["CLOUDFLARE_TURN_KEY_ID"].strip()
+    api_token = os.environ["CLOUDFLARE_TURN_API_TOKEN"].strip()
+    ttl_seconds = max(300, min(int(os.environ.get("CLOUDFLARE_TURN_TTL_SECONDS", "86400")), 86400))
+    request_body = json.dumps({"ttl": ttl_seconds}).encode("utf-8")
+    api_request = urllib_request.Request(
+        f"https://rtc.live.cloudflare.com/v1/turn/keys/{turn_key_id}/credentials/generate-ice-servers",
+        data=request_body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib_request.urlopen(api_request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib_error.URLError, TimeoutError, json.JSONDecodeError, KeyError, ValueError):
+        return get_webrtc_ice_servers()
+    return _normalize_ice_servers(payload.get("iceServers")) or get_webrtc_ice_servers()
+
+
+def repair_legacy_secure_chat_state(db):
+    # Clear migrated or partial secure-chat account keys that would break automatic chat encryption.
+    db.execute(
+        """
+        UPDATE users
+        SET public_key = '',
+            private_key_wrapped = '',
+            private_key_salt = ''
+        WHERE
+            (
+                COALESCE(public_key, '') <> ''
+                AND (
+                    COALESCE(private_key_wrapped, '') = ''
+                    OR COALESCE(private_key_salt, '') = ''
+                )
+            )
+            OR (
+                (
+                    COALESCE(private_key_wrapped, '') <> ''
+                    OR COALESCE(private_key_salt, '') <> ''
+                )
+                AND COALESCE(public_key, '') = ''
+            )
+            OR (COALESCE(public_key, '') <> '' AND LENGTH(public_key) < 100)
+            OR (COALESCE(private_key_wrapped, '') <> '' AND LENGTH(private_key_wrapped) < 100)
+            OR (COALESCE(private_key_salt, '') <> '' AND LENGTH(private_key_salt) < 8)
+        """
+    )
+    db.execute(
+        """
+        DELETE FROM user_devices
+        WHERE user_id IN (
+            SELECT id
+            FROM users
+            WHERE COALESCE(public_key, '') = ''
+              AND COALESCE(private_key_wrapped, '') = ''
+              AND COALESCE(private_key_salt, '') = ''
+        )
+        """
+    )
 
 
 def _normalize_query(query):
-    if not is_postgres_backend():
-        return query, False
     normalized = query.replace("?", "%s")
     had_insert_ignore = "INSERT OR IGNORE INTO" in normalized.upper()
     if had_insert_ignore:
@@ -210,6 +288,7 @@ class CursorResult:
     def __init__(self, cursor, lastrowid=None):
         self._cursor = cursor
         self.lastrowid = lastrowid
+        self.rowcount = getattr(cursor, "rowcount", None)
 
     def fetchall(self):
         return self._cursor.fetchall()
@@ -219,21 +298,14 @@ class CursorResult:
 
 
 def execute_schema_script(db, script):
-    if is_postgres_backend():
-        for statement in [chunk.strip() for chunk in script.split(";") if chunk.strip()]:
-            db.execute(statement)
-        return
-    db.executescript(script)
+    for statement in [chunk.strip() for chunk in script.split(";") if chunk.strip()]:
+        db.execute(statement)
 
 
 def get_db():
     # Keep one database connection per request and expose rows like dictionaries.
     if "db" not in g:
-        if is_postgres_backend():
-            g.db = psycopg.connect(app.config["DATABASE_DSN"], row_factory=dict_row)
-        else:
-            g.db = sqlite3.connect(app.config["DATABASE"])
-            g.db.row_factory = sqlite3.Row
+        g.db = psycopg.connect(app.config["DATABASE_DSN"], row_factory=dict_row)
         ensure_database_ready(g.db)
     return g.db
 
@@ -259,46 +331,32 @@ def execute_db(query, args=()):
     normalized_query, _ = _normalize_query(query)
     upper_query = normalized_query.lstrip().upper()
     insert_query = upper_query.startswith("INSERT INTO")
-    if is_postgres_backend() and insert_query and "RETURNING" not in upper_query:
+    if insert_query and "RETURNING" not in upper_query:
         normalized_query = f"{normalized_query.rstrip()} RETURNING id"
     cursor = db.execute(normalized_query, args)
     lastrowid = getattr(cursor, "lastrowid", None)
-    if is_postgres_backend() and insert_query:
+    if insert_query:
         lastrowid = _fetch_lastrowid(cursor.fetchone())
     db.commit()
     return CursorResult(cursor, lastrowid=lastrowid)
 
 
-def column_exists(db, table_name, column_name):
-    # Lightweight schema migration helper used during startup.
-    if is_postgres_backend():
-        row = db.execute(
-            """
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = %s AND column_name = %s
-            """,
-            (table_name, column_name),
-        ).fetchone()
-        return row is not None
-    columns = db.execute(f"PRAGMA table_info({table_name})").fetchall()
-    return any(column[1] == column_name for column in columns)
+def query_user_by_email(email, *, one=True):
+    # Match email addresses case-insensitively so migrated or legacy accounts can still sign in.
+    cleaned_email = (email or "").strip().lower()
+    if not cleaned_email:
+        return None if one else []
+    return query_db("SELECT * FROM users WHERE LOWER(email) = ?", (cleaned_email,), one=one)
 
 
 def table_exists(db, table_name):
     # Detect whether the base schema table already exists before running migrations.
-    if is_postgres_backend():
-        row = db.execute(
-            """
-            SELECT 1
-            FROM information_schema.tables
-            WHERE table_schema = 'public' AND table_name = %s
-            """,
-            (table_name,),
-        ).fetchone()
-        return row is not None
     row = db.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        """
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = %s
+        """,
         (table_name,),
     ).fetchone()
     return row is not None
@@ -306,127 +364,25 @@ def table_exists(db, table_name):
 
 def ensure_schema_updates(db):
     # Backfill new columns for local databases created before recent features existed.
-    if is_postgres_backend():
-        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS public_key TEXT DEFAULT ''")
-        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS private_key_wrapped TEXT DEFAULT ''")
-        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS private_key_salt TEXT DEFAULT ''")
-        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo_path TEXT DEFAULT ''")
-        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS github_url TEXT DEFAULT ''")
-        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS linkedin_url TEXT DEFAULT ''")
-        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS certifications TEXT DEFAULT ''")
-        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_setup_completed INTEGER NOT NULL DEFAULT 1")
-        db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP")
-        db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_name TEXT DEFAULT ''")
-        db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_path TEXT DEFAULT ''")
-        db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_kind TEXT DEFAULT ''")
-        db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_mime TEXT DEFAULT ''")
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_devices (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                device_token TEXT NOT NULL,
-                label TEXT DEFAULT '',
-                public_key TEXT NOT NULL,
-                revoked_at TIMESTAMP,
-                last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, device_token),
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS profile_certificates (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                file_name TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            )
-            """
-        )
-        return
-    request_table_sql = db.execute(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'exchange_requests'"
-    ).fetchone()
-    needs_request_rebuild = (
-        request_table_sql is not None
-        and "Countered" not in (request_table_sql[0] or "")
-    )
-    if needs_request_rebuild:
-        db.execute("ALTER TABLE exchange_requests RENAME TO exchange_requests_old")
-        db.executescript(
-            """
-            CREATE TABLE exchange_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sender_id INTEGER NOT NULL,
-                receiver_id INTEGER NOT NULL,
-                teach_skill_id INTEGER NOT NULL,
-                learn_skill_id INTEGER NOT NULL,
-                message TEXT DEFAULT '',
-                schedule_note TEXT DEFAULT '',
-                proposed_time TEXT DEFAULT '',
-                duration_minutes INTEGER NOT NULL DEFAULT 60,
-                status TEXT NOT NULL DEFAULT 'Pending' CHECK(status IN ('Pending', 'Countered', 'Accepted', 'Rejected')),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(sender_id) REFERENCES users(id),
-                FOREIGN KEY(receiver_id) REFERENCES users(id),
-                FOREIGN KEY(teach_skill_id) REFERENCES skills(id),
-                FOREIGN KEY(learn_skill_id) REFERENCES skills(id)
-            );
-            """
-        )
-        db.execute(
-            """
-            INSERT INTO exchange_requests (
-                id, sender_id, receiver_id, teach_skill_id, learn_skill_id, message, schedule_note,
-                proposed_time, duration_minutes, status, created_at
-            )
-            SELECT
-                id, sender_id, receiver_id, teach_skill_id, learn_skill_id, message, schedule_note,
-                '', 60, status, created_at
-            FROM exchange_requests_old
-            """
-        )
-        db.execute("DROP TABLE exchange_requests_old")
-    else:
-        if not column_exists(db, "exchange_requests", "proposed_time"):
-            db.execute("ALTER TABLE exchange_requests ADD COLUMN proposed_time TEXT DEFAULT ''")
-        if not column_exists(db, "exchange_requests", "duration_minutes"):
-            db.execute("ALTER TABLE exchange_requests ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 60")
-    if not column_exists(db, "users", "public_key"):
-        db.execute("ALTER TABLE users ADD COLUMN public_key TEXT DEFAULT ''")
-    if not column_exists(db, "users", "private_key_wrapped"):
-        db.execute("ALTER TABLE users ADD COLUMN private_key_wrapped TEXT DEFAULT ''")
-    if not column_exists(db, "users", "private_key_salt"):
-        db.execute("ALTER TABLE users ADD COLUMN private_key_salt TEXT DEFAULT ''")
-    if not column_exists(db, "users", "profile_photo_path"):
-        db.execute("ALTER TABLE users ADD COLUMN profile_photo_path TEXT DEFAULT ''")
-    if not column_exists(db, "users", "github_url"):
-        db.execute("ALTER TABLE users ADD COLUMN github_url TEXT DEFAULT ''")
-    if not column_exists(db, "users", "linkedin_url"):
-        db.execute("ALTER TABLE users ADD COLUMN linkedin_url TEXT DEFAULT ''")
-    if not column_exists(db, "users", "certifications"):
-        db.execute("ALTER TABLE users ADD COLUMN certifications TEXT DEFAULT ''")
-    if not column_exists(db, "users", "profile_setup_completed"):
-        db.execute("ALTER TABLE users ADD COLUMN profile_setup_completed INTEGER NOT NULL DEFAULT 1")
-    if not column_exists(db, "messages", "delivered_at"):
-        db.execute("ALTER TABLE messages ADD COLUMN delivered_at TIMESTAMP")
-    if not column_exists(db, "messages", "attachment_name"):
-        db.execute("ALTER TABLE messages ADD COLUMN attachment_name TEXT DEFAULT ''")
-    if not column_exists(db, "messages", "attachment_path"):
-        db.execute("ALTER TABLE messages ADD COLUMN attachment_path TEXT DEFAULT ''")
-    if not column_exists(db, "messages", "attachment_kind"):
-        db.execute("ALTER TABLE messages ADD COLUMN attachment_kind TEXT DEFAULT ''")
-    if not column_exists(db, "messages", "attachment_mime"):
-        db.execute("ALTER TABLE messages ADD COLUMN attachment_mime TEXT DEFAULT ''")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS public_key TEXT DEFAULT ''")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS private_key_wrapped TEXT DEFAULT ''")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS private_key_salt TEXT DEFAULT ''")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo_path TEXT DEFAULT ''")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS github_url TEXT DEFAULT ''")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS linkedin_url TEXT DEFAULT ''")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS certifications TEXT DEFAULT ''")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_setup_completed INTEGER NOT NULL DEFAULT 1")
+    db.execute("ALTER TABLE exchange_requests ADD COLUMN IF NOT EXISTS proposed_time TEXT DEFAULT ''")
+    db.execute("ALTER TABLE exchange_requests ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 60")
+    db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP")
+    db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_name TEXT DEFAULT ''")
+    db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_path TEXT DEFAULT ''")
+    db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_kind TEXT DEFAULT ''")
+    db.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_mime TEXT DEFAULT ''")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS user_devices (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             device_token TEXT NOT NULL,
             label TEXT DEFAULT '',
@@ -442,12 +398,33 @@ def ensure_schema_updates(db):
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS profile_certificates (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             file_name TEXT NOT NULL,
             file_path TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            actor_id INTEGER,
+            request_id INTEGER,
+            message_id INTEGER,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT DEFAULT '',
+            href TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            read_at TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(actor_id) REFERENCES users(id),
+            FOREIGN KEY(request_id) REFERENCES exchange_requests(id),
+            FOREIGN KEY(message_id) REFERENCES messages(id)
         )
         """
     )
@@ -461,10 +438,7 @@ def user_initials(name):
 
 def init_db():
     # Load the canonical schema from disk and seed the default admin account once.
-    if is_postgres_backend():
-        db = psycopg.connect(app.config["DATABASE_DSN"], row_factory=dict_row)
-    else:
-        db = sqlite3.connect(app.config["DATABASE"])
+    db = psycopg.connect(app.config["DATABASE_DSN"], row_factory=dict_row)
     try:
         ensure_database_ready(db)
     finally:
@@ -473,7 +447,9 @@ def init_db():
 
 def seed_default_admin(db):
     # Keep the default admin account available for local development.
-    lookup_query, _ = _normalize_query("SELECT id FROM users WHERE email = ?")
+    if not env_flag("SEED_DEFAULT_ADMIN", DEBUG_MODE):
+        return
+    lookup_query, _ = _normalize_query("SELECT id FROM users WHERE LOWER(email) = ?")
     admin = db.execute(lookup_query, ("admin@skillx.local",)).fetchone()
     if admin is None:
         insert_query, _ = _normalize_query(
@@ -499,9 +475,7 @@ def bootstrap_state_ready(db):
     row = db.execute("SELECT schema_ready FROM app_bootstrap_state WHERE id = 1").fetchone()
     if row is None:
         return False
-    if isinstance(row, dict):
-        return bool(row["schema_ready"])
-    return bool(row["schema_ready"] if isinstance(row, sqlite3.Row) else row[0])
+    return bool(row["schema_ready"])
 
 
 def mark_bootstrap_state_ready(db):
@@ -525,20 +499,16 @@ def ensure_database_ready(db, *, force_schema_bootstrap=False):
     with SCHEMA_BOOTSTRAP_LOCK:
         if SCHEMA_BOOTSTRAPPED and not force_schema_bootstrap:
             return
-        if is_postgres_backend():
-            db.execute("SELECT pg_advisory_xact_lock(%s)", (POSTGRES_BOOTSTRAP_LOCK_ID,))
-        else:
-            db.execute("PRAGMA busy_timeout = 5000")
-            db.execute("BEGIN IMMEDIATE")
+        db.execute("SELECT pg_advisory_xact_lock(%s)", (POSTGRES_BOOTSTRAP_LOCK_ID,))
         if bootstrap_state_ready(db) and not force_schema_bootstrap:
             db.commit()
             SCHEMA_BOOTSTRAPPED = True
             return
         if force_schema_bootstrap or not table_exists(db, "users") or not table_exists(db, "exchange_requests"):
-            schema_name = "schema_postgres.sql" if is_postgres_backend() else "schema.sql"
-            with open(os.path.join(BASE_DIR, schema_name), "r", encoding="utf-8") as schema_file:
+            with open(os.path.join(BASE_DIR, "schema_postgres.sql"), "r", encoding="utf-8") as schema_file:
                 execute_schema_script(db, schema_file.read())
         ensure_schema_updates(db)
+        repair_legacy_secure_chat_state(db)
         seed_default_admin(db)
         mark_bootstrap_state_ready(db)
         db.commit()
@@ -606,6 +576,9 @@ def redirect_admins_to_admin_panel():
         "browse",
         "matches",
         "chat",
+        "notifications",
+        "notifications_read_all",
+        "notification_read",
         "profile",
         "profile_setup",
         "skills",
@@ -619,15 +592,19 @@ def redirect_admins_to_admin_panel():
 @app.context_processor
 def inject_helpers():
     # Expose current_user and csrf_token() to every template automatically.
-    from services.notifications import unread_message_count
+    from services.notifications import actionable_request_count, notification_unread_count, unread_message_count
 
     unread_total = unread_message_count(g.user["id"]) if g.get("user") else 0
+    request_alert_total = actionable_request_count(g.user["id"]) if g.get("user") else 0
+    notification_total = notification_unread_count(g.user["id"]) if g.get("user") else 0
     return {
         "current_user": g.get("user"),
         "csrf_token": get_csrf_token,
         "style_version": STYLE_VERSION,
         "user_initials": user_initials,
         "chat_unread_total": unread_total,
+        "request_alert_total": request_alert_total,
+        "notification_unread_total": notification_total,
     }
 
 
@@ -709,7 +686,7 @@ def validate_optional_url(value, field_name):
 
 
 def format_timestamp(value, *, include_date=False):
-    # SQLite stores UTC timestamps, so convert them to the local display timezone.
+    # Database timestamps are stored in UTC, so convert them to the local display timezone.
     if not value:
         return ""
     normalized_value = str(value).strip()

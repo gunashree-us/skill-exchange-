@@ -3,9 +3,13 @@
 <section class="auth-band">
     <div class="shell auth-shell">
         <div class="auth-card">
-            <div class="auth-logo">◜</div>
-            <h1>Welcome Back</h1>
-            <p>Sign in to continue learning</p>
+            <div class="auth-logo brand-logo" aria-hidden="true">
+                <span class="brand-logo-core"></span>
+                <span class="brand-logo-dot brand-logo-dot-a"></span>
+                <span class="brand-logo-dot brand-logo-dot-b"></span>
+            </div>
+            <h1>Skill Exchange Platform</h1>
+            <p>Sign in to continue learning and exchanging skills</p>
             <form method="post" class="stack-form">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <label>Email

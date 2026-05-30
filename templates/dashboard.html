@@ -59,8 +59,8 @@
             </section>
 
             <section class="dashboard-section dashboard-section-skills">
-                <div class="two-col-layout">
-                    <article class="surface-card">
+                <div class="two-col-layout dashboard-grid">
+                    <article class="surface-card dashboard-panel">
                         <div class="card-title-row">
                             <h2>Skills You Offer</h2>
                             <a href="{{ url_for('skills') }}" class="icon-button">+</a>
@@ -82,7 +82,7 @@
                         </div>
                     </article>
 
-                    <article class="surface-card">
+                    <article class="surface-card dashboard-panel">
                         <div class="card-title-row">
                             <h2>Skills You Want to Learn</h2>
                             <a href="{{ url_for('skills') }}" class="icon-button">+</a>
@@ -107,16 +107,62 @@
             </section>
 
             <section class="dashboard-section dashboard-section-discovery">
-                <div class="two-col-layout">
-                    <article class="surface-card">
+                <div class="two-col-layout dashboard-grid">
+                    <article class="surface-card dashboard-panel">
+                        <div class="card-title-row">
+                            <h2>Incoming Requests</h2>
+                            <a href="{{ url_for('requests_view') }}" class="button button-light small-button">View All</a>
+                        </div>
+                        <div class="list-stack">
+                            {% for item in incoming %}
+                                <div class="list-item dashboard-list-item dashboard-request-item">
+                                    <div class="dashboard-list-copy">
+                                        <strong>{{ item.sender_name }}</strong>
+                                        <span>Offers {{ item.teach_skill }} and wants {{ item.learn_skill }}</span>
+                                    </div>
+                                    <span class="status-pill {{ item.status|lower }}">{{ item.status }}</span>
+                                </div>
+                            {% else %}
+                                <div class="dashboard-card-placeholder">
+                                    <p>No incoming requests yet.</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </article>
+
+                    <article class="surface-card dashboard-panel">
+                        <div class="card-title-row">
+                            <h2>Sent Requests</h2>
+                            <a href="{{ url_for('requests_view') }}" class="button button-light small-button">View All</a>
+                        </div>
+                        <div class="list-stack">
+                            {% for item in sent_requests %}
+                                <div class="list-item dashboard-list-item dashboard-request-item">
+                                    <div class="dashboard-list-copy">
+                                        <strong>{{ item.receiver_name }}</strong>
+                                        <span>You offered {{ item.teach_skill }} and asked for {{ item.learn_skill }}</span>
+                                    </div>
+                                    <span class="status-pill {{ item.status|lower }}">{{ item.status }}</span>
+                                </div>
+                            {% else %}
+                                <div class="dashboard-card-placeholder">
+                                    <p>No sent requests yet.</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </article>
+                </div>
+
+                <div class="two-col-layout dashboard-grid">
+                    <article class="surface-card dashboard-panel">
                         <div class="card-title-row">
                             <h2>Suggested Teachers</h2>
                             <span class="card-title-spacer" aria-hidden="true"></span>
                         </div>
                         <div class="list-stack">
                             {% for teacher in recommendation_feed.suggested_teachers %}
-                                <div class="list-item">
-                                    <div>
+                                <div class="list-item dashboard-list-item">
+                                    <div class="dashboard-list-copy">
                                         <strong>{{ teacher.name }}</strong>
                                         <span>Can teach {{ teacher.offers|join(', ') }}</span>
                                     </div>
@@ -128,8 +174,33 @@
                             {% endfor %}
                         </div>
                     </article>
+                </div>
 
-                    <article class="surface-card">
+                <div class="two-col-layout dashboard-grid">
+                    <article class="surface-card dashboard-panel">
+                        <div class="card-title-row">
+                            <h2>Suggested Learners</h2>
+                            <span class="card-title-spacer" aria-hidden="true"></span>
+                        </div>
+                        <div class="list-stack">
+                            {% for learner in recommendation_feed.suggested_learners %}
+                                <div class="list-item dashboard-list-item">
+                                    <div class="dashboard-list-copy">
+                                        <strong>{{ learner.name }}</strong>
+                                        <span>Wants {{ learner.wants|join(', ') }}</span>
+                                    </div>
+                                </div>
+                            {% else %}
+                                <div class="dashboard-card-placeholder">
+                                    <p>No learner suggestions yet. Add more teaching skills to grow demand around your profile.</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </article>
+                </div>
+
+                <div class="dashboard-grid dashboard-grid-single">
+                    <article class="surface-card dashboard-panel dashboard-panel-featured">
                         <div class="card-title-row">
                             <h2>Top Mutual Matches</h2>
                             <span class="card-title-spacer" aria-hidden="true"></span>
@@ -149,8 +220,10 @@
                                             <span class="tag-chip">{{ reason }}</span>
                                         {% endfor %}
                                     </div>
-                                    <p>Offers: <strong>{{ partner.offer_name }}</strong></p>
-                                    <p>Wants: <strong>{{ partner.want_name }}</strong></p>
+                                    <div class="partner-skill-meta">
+                                        <p>Offers: <strong>{{ partner.offer_name }}</strong></p>
+                                        <p>Wants: <strong>{{ partner.want_name }}</strong></p>
+                                    </div>
                                     {% if partner.user_id %}
                                         <form method="post" action="{{ url_for('send_request', receiver_id=partner.user_id) }}" class="request-compose compact">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -176,37 +249,16 @@
                     </article>
                 </div>
 
-                <div class="two-col-layout">
-                    <article class="surface-card">
-                        <div class="card-title-row">
-                            <h2>Suggested Learners</h2>
-                            <span class="card-title-spacer" aria-hidden="true"></span>
-                        </div>
-                        <div class="list-stack">
-                            {% for learner in recommendation_feed.suggested_learners %}
-                                <div class="list-item">
-                                    <div>
-                                        <strong>{{ learner.name }}</strong>
-                                        <span>Wants {{ learner.wants|join(', ') }}</span>
-                                    </div>
-                                </div>
-                            {% else %}
-                                <div class="dashboard-card-placeholder">
-                                    <p>No learner suggestions yet. Add more teaching skills to grow demand around your profile.</p>
-                                </div>
-                            {% endfor %}
-                        </div>
-                    </article>
-
-                    <article class="surface-card">
+                <div class="dashboard-grid dashboard-grid-single">
+                    <article class="surface-card dashboard-panel">
                         <div class="card-title-row">
                             <h2>Trending In Your Interests</h2>
                             <span class="card-title-spacer" aria-hidden="true"></span>
                         </div>
                         <div class="list-stack">
                             {% for person in recommendation_feed.trending %}
-                                <div class="list-item">
-                                    <div>
+                                <div class="list-item dashboard-list-item">
+                                    <div class="dashboard-list-copy">
                                         <strong>{{ person.name }}</strong>
                                         <span>{{ person.categories|join(', ') }}</span>
                                     </div>

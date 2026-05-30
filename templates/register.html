@@ -3,9 +3,13 @@
 <section class="auth-band">
     <div class="shell auth-shell">
         <div class="auth-card">
-            <div class="auth-logo">◜</div>
-            <h1>Create Account</h1>
-            <p>Join SkillSwap and start exchanging skills</p>
+            <div class="auth-logo brand-logo" aria-hidden="true">
+                <span class="brand-logo-core"></span>
+                <span class="brand-logo-dot brand-logo-dot-a"></span>
+                <span class="brand-logo-dot brand-logo-dot-b"></span>
+            </div>
+            <h1>Skill Exchange Platform</h1>
+            <p>Create your account and start exchanging skills</p>
             <form method="post" class="stack-form">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <label>Full Name

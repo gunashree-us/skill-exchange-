@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="soft-band page-band">
+    <div class="shell">
+        <div class="page-heading page-heading-with-action">
+            <div>
+                <h1>Notifications</h1>
+                <p>See request updates, chat alerts, and review activity in one place.</p>
+            </div>
+            {% if notifications %}
+                <form method="post" action="{{ url_for('notifications_read_all') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="button button-light" type="submit">Mark all as read</button>
+                </form>
+            {% endif %}
+        </div>
+
+        <article class="surface-card">
+            <div class="list-stack notification-stack">
+                {% for item in notifications %}
+                    <div class="notification-row {% if not item.read %}unread{% endif %}">
+                        <div class="notification-copy">
+                            <div class="notification-meta">
+                                <span class="status-pill {% if item.read %}light{% else %}dark{% endif %}">{{ item.kind|capitalize }}</span>
+                                <span>{{ item.time }}</span>
+                            </div>
+                            <strong>{{ item.title }}</strong>
+                            {% if item.body %}
+                                <p>{{ item.body }}</p>
+                            {% endif %}
+                        </div>
+                        <div class="notification-actions">
+                            {% if item.href %}
+                                <a href="{{ item.href }}" class="button button-dark small-button">Open</a>
+                            {% endif %}
+                            {% if not item.read %}
+                                <form method="post" action="{{ url_for('notification_read', notification_id=item.id) }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <input type="hidden" name="next_url" value="{{ url_for('notifications') }}">
+                                    <button class="button button-light small-button" type="submit">Mark read</button>
+                                </form>
+                            {% endif %}
+                        </div>
+                    </div>
+                {% else %}
+                    <div class="empty-state">No notifications yet. New requests, messages, and reviews will show up here.</div>
+                {% endfor %}
+            </div>
+        </article>
+    </div>
+</section>
+{% endblock %}

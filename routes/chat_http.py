@@ -10,8 +10,10 @@ from core import (
     SID_CONFERENCE_ROOMS,
     SID_ROOMS,
     app,
+    cloudflare_turn_credentials_configured,
     delete_file_if_exists,
     get_webrtc_ice_servers,
+    get_runtime_webrtc_ice_servers,
     get_db,
     login_required,
     query_db,
@@ -24,6 +26,7 @@ from services.notifications import (
     accepted_chat_partners,
     active_devices_for_users,
     can_chat_with,
+    create_notification,
     cleanup_conference_room,
     conference_room_members,
     emit_chat_notification,
@@ -68,6 +71,25 @@ def chat():
         chat_limit=20,
         webrtc_ice_servers=get_webrtc_ice_servers(),
         active_page="chat",
+    )
+
+
+@app.route("/api/webrtc/ice-servers")
+@login_required
+def webrtc_ice_servers():
+    # Generate fresh TURN credentials for this signed-in member when Cloudflare TURN is configured.
+    ice_servers = get_runtime_webrtc_ice_servers()
+    relay_configured = any(
+        str(url).strip().lower().startswith("turn:")
+        for server in ice_servers
+        for url in ((server.get("urls") if isinstance(server, dict) else []) or [])
+    )
+    return jsonify(
+        {
+            "iceServers": ice_servers,
+            "dynamic": cloudflare_turn_credentials_configured(),
+            "relayConfigured": relay_configured,
+        }
     )
 
 
@@ -154,6 +176,16 @@ def send_chat_message(partner_id):
     )
     if partner_online:
         socketio.emit("message_status", {"ids": [message["id"]], "status": "Delivered"}, room=user_room_name(g.user["id"]))
+    notification_body = "Sent you a file." if attachment else "Open chat to read the latest message."
+    create_notification(
+        partner_id,
+        "chat",
+        f"New chat message from {g.user['name']}",
+        body=notification_body,
+        href=url_for("chat", partner_id=g.user["id"]),
+        actor_id=g.user["id"],
+        message_id=message["id"],
+    )
     emit_chat_notification(g.user["id"], partner_id=partner_id)
     emit_chat_notification(partner_id, partner_id=g.user["id"])
     if request.is_json or request.headers.get("X-Requested-With") == "fetch":

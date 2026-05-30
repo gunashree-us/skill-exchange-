@@ -22,6 +22,121 @@ def unread_message_count(user_id):
     return row["count"] if row else 0
 
 
+def pending_request_count(user_id):
+    # Count new incoming exchange requests that still need this user's response.
+    row = query_db(
+        """
+        SELECT COUNT(*) AS count
+        FROM exchange_requests
+        WHERE receiver_id = ? AND status = 'Pending'
+        """,
+        (user_id,),
+        one=True,
+    )
+    return row["count"] if row else 0
+
+
+def countered_request_count(user_id):
+    # Count counter-offers that need this user's response.
+    row = query_db(
+        """
+        SELECT COUNT(*) AS count
+        FROM exchange_requests
+        WHERE sender_id = ? AND status = 'Countered'
+        """,
+        (user_id,),
+        one=True,
+    )
+    return row["count"] if row else 0
+
+
+def actionable_request_count(user_id):
+    # Show one combined badge for request updates that still need attention.
+    return pending_request_count(user_id) + countered_request_count(user_id)
+
+
+def notification_unread_count(user_id):
+    # Count stored in-app alerts that have not been acknowledged yet.
+    row = query_db(
+        "SELECT COUNT(*) AS count FROM notifications WHERE user_id = ? AND read_at IS NULL",
+        (user_id,),
+        one=True,
+    )
+    return row["count"] if row else 0
+
+
+def recent_notifications(user_id, *, limit=40):
+    # Load the latest stored alerts for the notifications page.
+    rows = query_db(
+        """
+        SELECT
+            n.*,
+            actor.name AS actor_name
+        FROM notifications n
+        LEFT JOIN users actor ON actor.id = n.actor_id
+        WHERE n.user_id = ?
+        ORDER BY n.created_at DESC, n.id DESC
+        LIMIT ?
+        """,
+        (user_id, limit),
+    )
+    items = []
+    for row in rows:
+        items.append(
+            {
+                "id": row["id"],
+                "kind": row["kind"],
+                "title": row["title"],
+                "body": row["body"] or "",
+                "href": row["href"] or "",
+                "actor_name": row["actor_name"] or "",
+                "created_at": row["created_at"],
+                "time": format_timestamp(row["created_at"]),
+                "read": bool(row["read_at"]),
+            }
+        )
+    return items
+
+
+def create_notification(user_id, kind, title, *, body="", href="", actor_id=None, request_id=None, message_id=None):
+    # Persist a user-facing alert so important updates survive beyond live socket events.
+    cursor = execute_db(
+        """
+        INSERT INTO notifications (user_id, actor_id, request_id, message_id, kind, title, body, href)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, actor_id, request_id, message_id, kind, title, body, href),
+    )
+    emit_notification_feed(user_id)
+    return cursor.lastrowid
+
+
+def mark_all_notifications_read(user_id):
+    # Let the notifications page clear the user's unread alert count in one action.
+    execute_db(
+        """
+        UPDATE notifications
+        SET read_at = CURRENT_TIMESTAMP
+        WHERE user_id = ? AND read_at IS NULL
+        """,
+        (user_id,),
+    )
+    emit_notification_feed(user_id)
+
+
+def mark_notification_read(user_id, notification_id):
+    # Allow a single notification to be acknowledged without clearing the whole inbox.
+    execute_db(
+        """
+        UPDATE notifications
+        SET read_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ? AND read_at IS NULL
+        """,
+        (notification_id, user_id),
+    )
+    emit_notification_feed(user_id)
+
+
 def active_devices_for_users(user_ids):
     # Return currently active device public keys for one or many users.
     if isinstance(user_ids, int):
@@ -115,6 +230,38 @@ def emit_chat_notification(user_id, *, partner_id=None):
         payload["partner_id"] = int(partner_id)
         payload["thread_unread"] = unread_thread_count(user_id, partner_id)
     socketio.emit("chat_notification", payload, room=user_room_name(user_id))
+
+
+def emit_request_notification(user_id):
+    # Push live request badge updates to every connected session for one user.
+    payload = {
+        "pending_requests": pending_request_count(user_id),
+        "countered_requests": countered_request_count(user_id),
+        "total_request_alerts": actionable_request_count(user_id),
+    }
+    socketio.emit("request_notification", payload, room=user_room_name(user_id))
+
+
+def emit_notification_feed(user_id):
+    # Push the latest stored-alert badge count to every connected session for one user.
+    socketio.emit(
+        "notification_feed",
+        {"total_unread": notification_unread_count(user_id)},
+        room=user_room_name(user_id),
+    )
+
+
+def emit_incoming_call_notification(user_id, *, caller_id, caller_name):
+    # Alert a user about an incoming video call even when they are outside the active chat page.
+    socketio.emit(
+        "incoming_call",
+        {
+            "caller_id": int(caller_id),
+            "caller_name": caller_name,
+            "href": f"/chat?partner_id={int(caller_id)}",
+        },
+        room=user_room_name(user_id),
+    )
 
 
 def accepted_chat_partners(user_id):
@@ -266,7 +413,7 @@ def serialize_message(message, current_user_id):
     attachment_path = message.get("attachment_path") or ""
     return {
         "id": message["id"],
-        "body": "Encrypted message. Unlock with your shared key." if is_encrypted_message_body(message["body"]) else message["body"],
+        "body": "Legacy secure message unavailable." if is_encrypted_message_body(message["body"]) else message["body"],
         "raw_body": message["body"],
         "encrypted": is_encrypted_message_body(message["body"]),
         "attachment_name": message.get("attachment_name") or "",
